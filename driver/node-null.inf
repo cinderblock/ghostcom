@@ -1,0 +1,77 @@
+;
+; node-null.inf — Installation INF for the node-null virtual COM port driver.
+;
+; This is a root-enumerated software-only driver. It creates a single
+; FDO that hosts all virtual COM port pairs via the control device.
+;
+; Installation:
+;   devcon install node-null.inf Root\NodeNull
+; or:
+;   pnputil /add-driver node-null.inf /install
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider    = %ManufacturerName%
+CatalogFile = node-null.cat
+DriverVer   = 04/08/2026,0.1.0.0
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13  ; Driver Store
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+node-null.sys = 1,,
+
+; ── Manufacturer ──────────────────────────────────────────────
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64,NTarm64
+
+[Standard.NTamd64]
+%DeviceDesc% = NodeNull_Device, Root\NodeNull
+
+[Standard.NTarm64]
+%DeviceDesc% = NodeNull_Device, Root\NodeNull
+
+; ── Device Install Section ────────────────────────────────────
+
+[NodeNull_Device.NT]
+CopyFiles = Drivers_Dir
+
+[Drivers_Dir]
+node-null.sys
+
+; ── Service Installation ──────────────────────────────────────
+
+[NodeNull_Device.NT.Services]
+AddService = NodeNull,%SPSVCINST_ASSOCSERVICE%,NodeNull_Service_Inst
+
+[NodeNull_Service_Inst]
+DisplayName    = %ServiceDesc%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\node-null.sys
+
+; ── WDF Co-installer ──────────────────────────────────────────
+
+[NodeNull_Device.NT.Wdf]
+KmdfService = NodeNull, NodeNull_wdfsect
+
+[NodeNull_wdfsect]
+KmdfLibraryVersion = 1.33
+
+; ── Strings ───────────────────────────────────────────────────
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ManufacturerName       = "node-null"
+DeviceDesc             = "node-null Virtual COM Port Controller"
+ServiceDesc            = "node-null Virtual Serial Port Driver"
+DiskName               = "node-null Driver Installation Disk"

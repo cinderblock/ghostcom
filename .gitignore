@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+bun.lock
+
+# Build output
+dist/
+*.node
+
+# Rust build artifacts
+addon/target/
+addon/*.node
+
+# Driver build artifacts
+driver/build/
+driver/x64/
+driver/ARM64/
+driver/*.sys
+driver/*.pdb
+driver/*.cat
+driver/*.cer
+driver/.vs/
+
+# IDE
+.vs/
+.vscode/
+*.suo
+*.user
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Env
+.env
+.env.*

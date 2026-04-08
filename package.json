@@ -1,0 +1,49 @@
+{
+  "name": "node-null",
+  "version": "0.1.0",
+  "description": "Virtual COM port creation for Node.js and Bun on Windows — high-performance native duplex streams with tappable serial control signals",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "addon/"
+  ],
+  "scripts": {
+    "build:addon": "cd addon && napi build --platform --release",
+    "build:addon:debug": "cd addon && napi build --platform",
+    "build:ts": "tsc",
+    "build": "bun run build:addon && bun run build:ts",
+    "build:driver": "powershell -ExecutionPolicy Bypass -File scripts/build-driver.ps1",
+    "install:driver": "powershell -ExecutionPolicy Bypass -File scripts/install-driver.ps1",
+    "uninstall:driver": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-driver.ps1",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist addon/target addon/*.node"
+  },
+  "napi": {
+    "binaryName": "node-null",
+    "targets": [
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc"
+    ]
+  },
+  "os": [
+    "win32"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "license": "MIT"
+}

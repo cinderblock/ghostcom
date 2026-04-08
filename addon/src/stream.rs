@@ -1,0 +1,305 @@
+//! Native stream implementation — bridges overlapped I/O on the
+//! companion device handle to Node.js readable/writable stream
+//! callbacks via ThreadsafeFunction.
+//!
+//! ## Architecture
+//!
+//! ```text
+//!  JS thread                  Read thread
+//!  ────────                  ────────────
+//!  stream._read() ──────►   resume event
+//!                           ReadFile (overlapped, blocks)
+//!  push(chunk) ◄──────────  ThreadsafeFunction callback
+//!  (backpressure) ────────► pause (atomic flag)
+//!
+//!  stream._write(chunk) ──► WriteFile (overlapped, on worker thread)
+//!  callback(err) ◄────────  completion
+//! ```
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
+
+use napi::bindgen_prelude::*;
+use napi::threadsafe_function::{
+    ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode,
+};
+use napi_derive::napi;
+use windows::Win32::Foundation::{ERROR_IO_PENDING, ERROR_OPERATION_ABORTED};
+use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
+
+use crate::error::SendHandle;
+use crate::overlapped::{cancel_io, OverlappedEvent};
+
+/// Read buffer size — matches the driver's ring buffer default.
+const READ_BUF_SIZE: usize = 64 * 1024;
+
+/// Native stream binding exposed to JavaScript.
+///
+/// The TypeScript `VirtualPortStream` wraps this to implement `Duplex`.
+#[napi]
+pub struct PortStreamNative {
+    handle: SendHandle,
+    shutdown: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+    read_thread: Option<JoinHandle<()>>,
+    // Store tsfn references so we can abort them on shutdown.
+    data_tsfn: Option<ThreadsafeFunction<Buffer, ErrorStrategy::CalleeHandled>>,
+    error_tsfn: Option<ThreadsafeFunction<String, ErrorStrategy::CalleeHandled>>,
+}
+
+impl PortStreamNative {
+    /// Create a new native stream for the given companion device handle.
+    pub fn new(handle: SendHandle) -> Self {
+        Self {
+            handle,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            paused: Arc::new(AtomicBool::new(false)),
+            read_thread: None,
+            data_tsfn: None,
+            error_tsfn: None,
+        }
+    }
+}
+
+#[napi]
+impl PortStreamNative {
+    /// Register the data callback. This starts the read thread.
+    ///
+    /// Called once from the TypeScript constructor.
+    #[napi]
+    pub fn on_data(&mut self, callback: JsFunction) -> Result<()> {
+        let tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::CalleeHandled> =
+            callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
+
+        let handle = self.handle;
+        let shutdown = self.shutdown.clone();
+        let paused = self.paused.clone();
+        let tsfn_clone = tsfn.clone();
+
+        let read_thread = thread::Builder::new()
+            .name("vcom-reader".into())
+            .spawn(move || {
+                Self::read_thread_main(handle, tsfn_clone, shutdown, paused);
+            })
+            .map_err(|e| {
+                napi::Error::new(
+                    napi::Status::GenericFailure,
+                    format!("Failed to spawn read thread: {e}"),
+                )
+            })?;
+
+        self.read_thread = Some(read_thread);
+        self.data_tsfn = Some(tsfn);
+        Ok(())
+    }
+
+    /// Register the read error callback.
+    #[napi]
+    pub fn on_read_error(&mut self, callback: JsFunction) -> Result<()> {
+        let tsfn: ThreadsafeFunction<String, ErrorStrategy::CalleeHandled> =
+            callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
+        self.error_tsfn = Some(tsfn);
+        Ok(())
+    }
+
+    /// Write a buffer to the companion device (overlapped I/O).
+    ///
+    /// The callback is invoked when the write completes.
+    #[napi]
+    pub fn write(&self, chunk: Buffer, callback: JsFunction) -> Result<()> {
+        let handle = self.handle;
+        let data: Vec<u8> = chunk.to_vec();
+
+        let tsfn: ThreadsafeFunction<Option<String>, ErrorStrategy::CalleeHandled> =
+            callback.create_threadsafe_function(0, |ctx| {
+                Ok(vec![ctx.value])
+            })?;
+
+        // Perform the write on a worker thread to avoid blocking the
+        // JS event loop.
+        thread::Builder::new()
+            .name("vcom-writer".into())
+            .spawn(move || {
+                let result = Self::do_write(handle, &data);
+                match result {
+                    Ok(()) => {
+                        tsfn.call(Ok(None), ThreadsafeFunctionCallMode::NonBlocking);
+                    }
+                    Err(e) => {
+                        tsfn.call(
+                            Ok(Some(e.to_string())),
+                            ThreadsafeFunctionCallMode::NonBlocking,
+                        );
+                    }
+                }
+            })
+            .map_err(|e| {
+                napi::Error::new(
+                    napi::Status::GenericFailure,
+                    format!("Failed to spawn write thread: {e}"),
+                )
+            })?;
+
+        Ok(())
+    }
+
+    /// Pause reading (backpressure from the JS side).
+    #[napi]
+    pub fn pause_reading(&self) {
+        self.paused.store(true, Ordering::Release);
+    }
+
+    /// Resume reading after a pause.
+    #[napi]
+    pub fn resume_reading(&self) {
+        self.paused.store(false, Ordering::Release);
+    }
+
+    /// Shut down the stream: cancel pending I/O, join threads.
+    #[napi]
+    pub fn shutdown(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+
+        // Cancel pending I/O so the read thread unblocks.
+        let _ = cancel_io(self.handle.raw());
+
+        // Join the read thread.
+        if let Some(thread) = self.read_thread.take() {
+            let _ = thread.join();
+        }
+
+        // Abort the tsfn references so the process can exit.
+        if let Some(tsfn) = self.data_tsfn.take() {
+            tsfn.abort().ok();
+        }
+        if let Some(tsfn) = self.error_tsfn.take() {
+            tsfn.abort().ok();
+        }
+    }
+
+    /// The read thread's main loop.
+    fn read_thread_main(
+        handle: SendHandle,
+        tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::CalleeHandled>,
+        shutdown: Arc<AtomicBool>,
+        paused: Arc<AtomicBool>,
+    ) {
+        let mut overlapped = match OverlappedEvent::new() {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("node-null: read thread failed to create overlapped event: {e}");
+                return;
+            }
+        };
+
+        let mut buffer = vec![0u8; READ_BUF_SIZE];
+
+        loop {
+            if shutdown.load(Ordering::Acquire) {
+                break;
+            }
+
+            // If paused (backpressure), spin-wait with a brief sleep.
+            while paused.load(Ordering::Acquire) {
+                if shutdown.load(Ordering::Acquire) {
+                    return;
+                }
+                thread::sleep(std::time::Duration::from_millis(1));
+            }
+
+            // Reset the overlapped event.
+            if let Err(e) = overlapped.reset() {
+                eprintln!("node-null: read thread reset error: {e}");
+                break;
+            }
+
+            // Issue overlapped ReadFile.
+            let mut bytes_read: u32 = 0;
+            let read_ok = unsafe {
+                ReadFile(
+                    handle.raw(),
+                    Some(&mut buffer),
+                    Some(&mut bytes_read),
+                    Some(overlapped.as_mut_ptr()),
+                )
+            };
+
+            match read_ok {
+                Ok(()) => {
+                    // Completed synchronously — data is ready.
+                }
+                Err(e) if e.code() == ERROR_IO_PENDING.into() => {
+                    // Pending — wait for completion.
+                    match overlapped.wait_infinite() {
+                        Ok(()) => {
+                            match overlapped.get_result(handle.raw()) {
+                                Ok(n) => bytes_read = n,
+                                Err(_) => {
+                                    if shutdown.load(Ordering::Acquire) {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            if shutdown.load(Ordering::Acquire) {
+                                break;
+                            }
+                            continue;
+                        }
+                    }
+                }
+                Err(e) => {
+                    if shutdown.load(Ordering::Acquire) {
+                        break;
+                    }
+                    if e.code() == ERROR_OPERATION_ABORTED.into() {
+                        break;
+                    }
+                    eprintln!("node-null: read error: {e}");
+                    break;
+                }
+            }
+
+            if bytes_read > 0 {
+                let chunk = Buffer::from(&buffer[..bytes_read as usize]);
+                tsfn.call(Ok(chunk), ThreadsafeFunctionCallMode::NonBlocking);
+            }
+        }
+    }
+
+    /// Perform a synchronous-overlapped write.
+    fn do_write(handle: SendHandle, data: &[u8]) -> napi::Result<()> {
+        let mut overlapped = OverlappedEvent::new()?;
+        overlapped.reset()?;
+
+        let mut bytes_written: u32 = 0;
+
+        let write_ok = unsafe {
+            WriteFile(
+                handle.raw(),
+                Some(data),
+                Some(&mut bytes_written),
+                Some(overlapped.as_mut_ptr()),
+            )
+        };
+
+        match write_ok {
+            Ok(()) => Ok(()),
+            Err(e) if e.code() == ERROR_IO_PENDING.into() => {
+                overlapped.wait_infinite()?;
+                overlapped.get_result(handle.raw())?;
+                Ok(())
+            }
+            Err(e) => Err(crate::error::win_err("WriteFile", e)),
+        }
+    }
+}
+
+impl Drop for PortStreamNative {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
