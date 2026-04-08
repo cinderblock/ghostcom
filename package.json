@@ -16,8 +16,8 @@
     "addon/"
   ],
   "scripts": {
-    "build:addon": "cd addon && napi build --platform --release",
-    "build:addon:debug": "cd addon && napi build --platform",
+    "build:addon": "napi build --manifest-path addon/Cargo.toml --release -o addon",
+    "build:addon:debug": "napi build --manifest-path addon/Cargo.toml -o addon",
     "build:ts": "tsc",
     "build": "bun run build:addon && bun run build:ts",
     "build:driver": "powershell -ExecutionPolicy Bypass -File scripts/build-driver.ps1",
