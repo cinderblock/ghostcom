@@ -89,7 +89,7 @@ VcomCompanionCreate(
 
     deviceInit = WdfControlDeviceInitAllocate(
         Driver,
-        &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX  /* All users can R/W */
+        &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX  /* All users can R/W */
     );
     if (!deviceInit) {
         return STATUS_INSUFFICIENT_RESOURCES;

@@ -13,11 +13,22 @@
 
 #include <ntddk.h>
 #include <wdf.h>
-#include <ntddser.h>      /* Serial IOCTL definitions */
+#include <wdmsec.h>        /* SDDL_DEVOBJ_* security descriptors */
+#include <ntddser.h>       /* Serial IOCTL definitions */
 #include <ntstrsafe.h>     /* Safe string functions */
 
 #include "ioctls.h"
 #include "ringbuf.h"
+
+/* ── Missing serial constants ────────────────────────────────── */
+/* These are hardware register bit definitions not always in ntddser.h */
+
+#ifndef SERIAL_MCR_DTR
+#define SERIAL_MCR_DTR  0x01
+#endif
+#ifndef SERIAL_MCR_RTS
+#define SERIAL_MCR_RTS  0x02
+#endif
 
 /* ── Pool tag ─────────────────────────────────────────────────── */
 

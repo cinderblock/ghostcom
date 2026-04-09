@@ -7,17 +7,15 @@
 
 #include "driver.h"
 
+/* ── Tracing ──────────────────────────────────────────────────── */
+
+#define TraceEvents(level, flag, msg, ...) \
+    KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL, "node-null [CTRL]: " msg "\n", ##__VA_ARGS__))
+
 /* ── Symbolic link for the control device ─────────────────────── */
 
-static DECLARE_CONST_UNICODE_STRING(
-    ControlDeviceName,
-    L"\\Device\\VCOMControl"
-);
-
-static DECLARE_CONST_UNICODE_STRING(
-    ControlSymLink,
-    L"\\DosDevices\\VCOMControl"
-);
+static const WCHAR ControlDeviceNameBuf[] = L"\\Device\\VCOMControl";
+static const WCHAR ControlSymLinkBuf[] = L"\\DosDevices\\VCOMControl";
 
 /*
  * Module-level pointer to the FDO device context.
@@ -59,7 +57,9 @@ VcomControlDeviceCreate(
     }
 
     /* Assign a device name. */
-    status = WdfDeviceInitAssignName(controlInit, &ControlDeviceName);
+    UNICODE_STRING controlDeviceName;
+    RtlInitUnicodeString(&controlDeviceName, ControlDeviceNameBuf);
+    status = WdfDeviceInitAssignName(controlInit, &controlDeviceName);
     if (!NT_SUCCESS(status)) {
         WdfDeviceInitFree(controlInit);
         return status;
@@ -81,7 +81,9 @@ VcomControlDeviceCreate(
     DevCtx->ControlDevice = controlDevice;
 
     /* Create a symbolic link so user-mode can open \\.\VCOMControl. */
-    status = WdfDeviceCreateSymbolicLink(controlDevice, &ControlSymLink);
+    UNICODE_STRING controlSymLink;
+    RtlInitUnicodeString(&controlSymLink, ControlSymLinkBuf);
+    status = WdfDeviceCreateSymbolicLink(controlDevice, &controlSymLink);
     if (!NT_SUCCESS(status)) {
         TraceEvents(0, 0, "WdfDeviceCreateSymbolicLink failed: 0x%08X", status);
         return status;

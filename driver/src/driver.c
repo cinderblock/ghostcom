@@ -72,7 +72,8 @@ VcomEvtDeviceAdd(
     WdfDeviceInitSetExclusive(DeviceInit, FALSE);
 
     /* Set a device name so we can create a control device symlink. */
-    DECLARE_CONST_UNICODE_STRING(deviceName, L"\\Device\\NodeNull");
+    UNICODE_STRING deviceName;
+    RtlInitUnicodeString(&deviceName, L"\\Device\\NodeNull");
     status = WdfDeviceInitAssignName(DeviceInit, &deviceName);
     if (!NT_SUCCESS(status)) {
         TraceEvents(0, 0, "WdfDeviceInitAssignName failed: 0x%08X", status);
