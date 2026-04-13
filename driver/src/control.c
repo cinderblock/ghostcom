@@ -50,7 +50,7 @@ VcomControlDeviceCreate(
      */
     controlInit = WdfControlDeviceInitAllocate(
         WdfDeviceGetDriver(ParentDevice),
-        &SDDL_DEVOBJ_SYS_ALL_ADM_ALL  /* Admin + SYSTEM access */
+        &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX  /* All users can R/W */
     );
     if (!controlInit) {
         return STATUS_INSUFFICIENT_RESOURCES;

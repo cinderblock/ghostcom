@@ -154,7 +154,10 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(VCOM_FILE_CTX, VcomGetFileContext)
 /* ── Function prototypes: driver.c ────────────────────────────── */
 
 DRIVER_INITIALIZE DriverEntry;
-EVT_WDF_DRIVER_DEVICE_ADD  VcomEvtDeviceAdd;
+EVT_WDF_DRIVER_DEVICE_ADD             VcomEvtDeviceAdd;
+EVT_WDF_DEVICE_D0_ENTRY               VcomEvtDeviceD0Entry;
+EVT_WDF_DEVICE_D0_EXIT                VcomEvtDeviceD0Exit;
+EVT_WDF_DEVICE_SELF_MANAGED_IO_CLEANUP VcomEvtSelfManagedIoCleanup;
 
 /* ── Function prototypes: control.c ───────────────────────────── */
 

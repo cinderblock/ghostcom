@@ -65,7 +65,7 @@ ServiceBinary  = %13%\node-null.sys
 KmdfService = NodeNull, NodeNull_wdfsect
 
 [NodeNull_wdfsect]
-KmdfLibraryVersion = 1.35
+KmdfLibraryVersion = 1.33
 
 ; ── Strings ───────────────────────────────────────────────────
 

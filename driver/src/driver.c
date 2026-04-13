@@ -46,6 +46,55 @@ DriverEntry(
 }
 
 
+/* ── PnP Power Callbacks ──────────────────────────────────────── */
+
+/*
+ * These callbacks make the device stoppable, so the driver service
+ * can be stopped and updated without requiring a reboot.
+ */
+
+NTSTATUS
+VcomEvtDeviceD0Entry(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState
+)
+{
+    UNREFERENCED_PARAMETER(Device);
+    UNREFERENCED_PARAMETER(PreviousState);
+    TraceEvents(0, 0, "Device entering D0 (powered on)");
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+VcomEvtDeviceD0Exit(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE TargetState
+)
+{
+    UNREFERENCED_PARAMETER(Device);
+    UNREFERENCED_PARAMETER(TargetState);
+    TraceEvents(0, 0, "Device exiting D0 (powering down)");
+    return STATUS_SUCCESS;
+}
+
+VOID
+VcomEvtSelfManagedIoCleanup(
+    _In_ WDFDEVICE Device
+)
+{
+    PVCOM_DEVICE_CTX devCtx = VcomGetDeviceContext(Device);
+
+    TraceEvents(0, 0, "SelfManagedIoCleanup — destroying all port pairs");
+
+    /* Tear down all active port pairs on driver stop/unload. */
+    for (ULONG i = 0; i < VCOM_MAX_PORTS; i++) {
+        if (devCtx->Ports[i] && devCtx->Ports[i]->Active) {
+            VcomPortPairDestroy(devCtx, devCtx->Ports[i]);
+        }
+    }
+}
+
+
 /* ── EvtDeviceAdd ─────────────────────────────────────────────── */
 
 NTSTATUS
@@ -85,6 +134,20 @@ VcomEvtDeviceAdd(
      * control device and companion devices).
      */
     WdfDeviceInitSetIoType(DeviceInit, WdfDeviceIoBuffered);
+
+    /*
+     * Register PnP power callbacks so the device is stoppable.
+     * Without these, WDF marks the service as NOT_STOPPABLE and
+     * the driver can't be stopped/updated without a reboot.
+     */
+    {
+        WDF_PNPPOWER_EVENT_CALLBACKS pnpCallbacks;
+        WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpCallbacks);
+        pnpCallbacks.EvtDeviceD0Entry = VcomEvtDeviceD0Entry;
+        pnpCallbacks.EvtDeviceD0Exit = VcomEvtDeviceD0Exit;
+        pnpCallbacks.EvtDeviceSelfManagedIoCleanup = VcomEvtSelfManagedIoCleanup;
+        WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnpCallbacks);
+    }
 
     /* ── Create the device ──────────────────────────────────── */
 

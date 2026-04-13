@@ -18,7 +18,7 @@
     <TargetExt>.sys</TargetExt>
     <DriverType>KMDF</DriverType>
     <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
-    <KMDF_VERSION_MINOR>35</KMDF_VERSION_MINOR>
+    <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
 
@@ -31,7 +31,7 @@
     <TargetExt>.sys</TargetExt>
     <DriverType>KMDF</DriverType>
     <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
-    <KMDF_VERSION_MINOR>35</KMDF_VERSION_MINOR>
+    <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
 
@@ -44,7 +44,7 @@
     <TargetExt>.sys</TargetExt>
     <DriverType>KMDF</DriverType>
     <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
-    <KMDF_VERSION_MINOR>35</KMDF_VERSION_MINOR>
+    <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
 
@@ -57,7 +57,7 @@
     <TargetExt>.sys</TargetExt>
     <DriverType>KMDF</DriverType>
     <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
-    <KMDF_VERSION_MINOR>35</KMDF_VERSION_MINOR>
+    <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
 
@@ -74,13 +74,13 @@
   <PropertyGroup>
     <WDKContentRoot Condition="'$(WDKContentRoot)' == ''">$(MSBuildProgramFiles32)\Windows Kits\10\</WDKContentRoot>
     <WDKVersion>10.0.26100.0</WDKVersion>
-    <KmdfIncludeVersion>1.35</KmdfIncludeVersion>
+    <KmdfIncludeVersion>1.33</KmdfIncludeVersion>
   </PropertyGroup>
 
   <ItemDefinitionGroup>
     <ClCompile>
       <AdditionalIncludeDirectories>src;$(WDKContentRoot)Include\$(WDKVersion)\km;$(WDKContentRoot)Include\$(WDKVersion)\shared;$(WDKContentRoot)Include\$(WDKVersion)\um;$(WDKContentRoot)Include\wdf\kmdf\$(KmdfIncludeVersion);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>_KERNEL_MODE;KMDF_VERSION_MAJOR=1;KMDF_VERSION_MINOR=35;_AMD64_;AMD64;NTSTRSAFE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_KERNEL_MODE;KMDF_VERSION_MAJOR=1;KMDF_VERSION_MINOR=33;_AMD64_;AMD64;NTSTRSAFE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>false</TreatWarningAsError>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
