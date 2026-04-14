@@ -1,77 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="12.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
   <PropertyGroup Label="Globals">
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
-    <TemplateGuid>{1bc93793-694f-48fe-9372-81e2b05556fd}</TemplateGuid>
     <RootNamespace>GhostCOM</RootNamespace>
     <ProjectName>ghostcom</ProjectName>
     <MinimumVisualStudioVersion>12.0</MinimumVisualStudioVersion>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
 
-  <!-- Configuration: Release|x64 -->
   <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <TargetVersion>Windows10</TargetVersion>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <TargetExt>.sys</TargetExt>
-    <DriverType>KMDF</DriverType>
-    <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
-    <KMDF_VERSION_MINOR>35</KMDF_VERSION_MINOR>
-    <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
 
-  <!-- Configuration: Debug|x64 -->
   <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <TargetVersion>Windows10</TargetVersion>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <TargetExt>.sys</TargetExt>
-    <DriverType>KMDF</DriverType>
-    <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
-    <KMDF_VERSION_MINOR>35</KMDF_VERSION_MINOR>
-    <DriverTargetPlatform>Universal</DriverTargetPlatform>
-  </PropertyGroup>
-
-  <!-- Configuration: Release|ARM64 -->
-  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
-    <TargetVersion>Windows10</TargetVersion>
-    <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
-    <ConfigurationType>DynamicLibrary</ConfigurationType>
-    <TargetExt>.sys</TargetExt>
-    <DriverType>KMDF</DriverType>
-    <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
-    <KMDF_VERSION_MINOR>35</KMDF_VERSION_MINOR>
-    <DriverTargetPlatform>Universal</DriverTargetPlatform>
-  </PropertyGroup>
-
-  <!-- Configuration: Debug|ARM64 -->
-  <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
-    <TargetVersion>Windows10</TargetVersion>
-    <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
-    <ConfigurationType>DynamicLibrary</ConfigurationType>
-    <TargetExt>.sys</TargetExt>
-    <DriverType>KMDF</DriverType>
-    <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
-    <KMDF_VERSION_MINOR>35</KMDF_VERSION_MINOR>
-    <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
 
-  <!-- Disable manifest for kernel-mode drivers -->
   <PropertyGroup>
     <GenerateManifest>false</GenerateManifest>
     <EmbedManifest>false</EmbedManifest>
-  </PropertyGroup>
-
-  <!-- WDK paths -->
-  <PropertyGroup>
     <WDKContentRoot Condition="'$(WDKContentRoot)' == ''">$(MSBuildProgramFiles32)\Windows Kits\10\</WDKContentRoot>
     <WDKVersion>10.0.26100.0</WDKVersion>
     <KmdfIncludeVersion>1.35</KmdfIncludeVersion>
@@ -83,11 +50,9 @@
       <PreprocessorDefinitions>_KERNEL_MODE;KMDF_VERSION_MAJOR=1;KMDF_VERSION_MINOR=35;_AMD64_;AMD64;NTSTRSAFE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>false</TreatWarningAsError>
-      <LanguageStandard_C>stdc17</LanguageStandard_C>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <ExceptionHandling>false</ExceptionHandling>
       <BufferSecurityCheck>true</BufferSecurityCheck>
-      <CallingConvention>StdCall</CallingConvention>
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(WDKContentRoot)Lib\$(WDKVersion)\km\$(Platform);$(WDKContentRoot)Lib\wdf\kmdf\$(Platform)\$(KmdfIncludeVersion);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
@@ -95,32 +60,20 @@
       <EntryPointSymbol>FxDriverEntry</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Native</SubSystem>
-      <Driver>WDM</Driver>
       <EnableUAC>false</EnableUAC>
-      <IgnoreAllDefaultLibraries>false</IgnoreAllDefaultLibraries>
       <IgnoreSpecificDefaultLibraries>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;msvcrt.lib;libcmt.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ForceSymbolReferences>?__KMDF_TYPE_INIT_START@@3U_MARKER_TYPE@@A;?__KMDF_TYPE_INIT_END@@3PEAXEA;?__KMDF_CLASS_BIND_START@@3U_MARKER_TYPE@@A</ForceSymbolReferences>
     </Link>
-    <Inf>
-      <SpecifyArchitecture>true</SpecifyArchitecture>
-    </Inf>
   </ItemDefinitionGroup>
 
-  <!-- Release-specific settings -->
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
-    <ClCompile>
-      <Optimization>MaxSpeed</Optimization>
-    </ClCompile>
+    <ClCompile><Optimization>MaxSpeed</Optimization></ClCompile>
   </ItemDefinitionGroup>
 
-  <!-- Debug-specific settings -->
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
-    <ClCompile>
-      <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>DBG=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-    </ClCompile>
+    <ClCompile><Optimization>Disabled</Optimization></ClCompile>
   </ItemDefinitionGroup>
 
-  <!-- Source files -->
   <ItemGroup>
     <ClCompile Include="src\driver.c" />
     <ClCompile Include="src\control.c" />
@@ -128,40 +81,11 @@
     <ClCompile Include="src\companion.c" />
     <ClCompile Include="src\portpair.c" />
   </ItemGroup>
-
-  <!-- Header files -->
   <ItemGroup>
     <ClInclude Include="src\driver.h" />
     <ClInclude Include="src\ioctls.h" />
     <ClInclude Include="src\ringbuf.h" />
   </ItemGroup>
 
-  <!-- INF file -->
-  <ItemGroup>
-    <Inf Include="ghostcom.inf" />
-  </ItemGroup>
-
-  <!-- Platform configurations -->
-  <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Release|x64">
-      <Configuration>Release</Configuration>
-      <Platform>x64</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Debug|x64">
-      <Configuration>Debug</Configuration>
-      <Platform>x64</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Release|ARM64">
-      <Configuration>Release</Configuration>
-      <Platform>ARM64</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Debug|ARM64">
-      <Configuration>Debug</Configuration>
-      <Platform>ARM64</Platform>
-    </ProjectConfiguration>
-  </ItemGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <ImportGroup Label="ExtensionTargets">
-  </ImportGroup>
 </Project>

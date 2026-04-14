@@ -31,12 +31,12 @@ ghostcom.sys = 1,,
 ; ── Manufacturer ──────────────────────────────────────────────
 
 [Manufacturer]
-%ManufacturerName% = Standard,NTamd64,NTarm64
+%ManufacturerName% = Standard,NTamd64.10.0...16299,NTarm64.10.0...16299
 
-[Standard.NTamd64]
+[Standard.NTamd64.10.0...16299]
 %DeviceDesc% = GhostCOM_Device, Root\GhostCOM
 
-[Standard.NTarm64]
+[Standard.NTarm64.10.0...16299]
 %DeviceDesc% = GhostCOM_Device, Root\GhostCOM
 
 ; ── Device Install Section ────────────────────────────────────
