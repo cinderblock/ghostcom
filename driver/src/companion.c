@@ -109,6 +109,7 @@ GcomCompanionCreate(
     }
 
     WdfDeviceInitSetIoType(deviceInit, WdfDeviceIoBuffered);
+    WdfDeviceInitSetExclusive(deviceInit, FALSE);
 
     /* Configure file object support. */
     WDF_FILEOBJECT_CONFIG_INIT(&fileConfig,

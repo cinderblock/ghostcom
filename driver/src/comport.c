@@ -111,6 +111,7 @@ GcomComPortCreate(
     }
 
     WdfDeviceInitSetIoType(deviceInit, WdfDeviceIoBuffered);
+    WdfDeviceInitSetExclusive(deviceInit, FALSE);
 
     /* Configure file object support (for tracking open/close). */
     WDF_FILEOBJECT_CONFIG_INIT(&fileConfig,
