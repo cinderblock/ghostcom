@@ -67,9 +67,11 @@ GcomControlDeviceCreate(
 
     WdfDeviceInitSetIoType(controlInit, WdfDeviceIoBuffered);
 
-    /* Create the control device. */
+    /* Create the control device.
+     * Note: Control devices cannot have a ParentObject set via
+     * WDF_OBJECT_ATTRIBUTES — they are parented to the driver
+     * object implicitly. */
     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-    attributes.ParentObject = ParentDevice;
 
     WDFDEVICE controlDevice;
     status = WdfDeviceCreate(&controlInit, &attributes, &controlDevice);

@@ -34,3 +34,4 @@ Desktop.ini
 .env
 .env.*
 driver/ghostcom/
+driver/src_driver_pp.i

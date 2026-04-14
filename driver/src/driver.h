@@ -19,16 +19,6 @@
 #define KMDF_VERSION_MINOR 35
 #endif
 
-/*
- * Override the /merge directives embedded in WdfDriverEntry.lib.
- * The lib merges .kmdftypeinit → .data and .kmdfclassbind → .data,
- * but this destroys the $a/$b/$c ordering the WDF loader needs.
- * Redirecting to dedicated sections preserves ordering.
- * (Section names max 8 chars in PE format.)
- */
-#pragma comment(linker, "/MERGE:.kmdftypeinit=.wdfinit")
-#pragma comment(linker, "/MERGE:.kmdfclassbind=.wdfbind")
-
 #include <ntddk.h>
 #include <wdf.h>
 #include <wdmsec.h>        /* SDDL_DEVOBJ_* security descriptors */
