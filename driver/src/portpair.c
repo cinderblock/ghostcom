@@ -30,7 +30,7 @@ GcomFindFreePortNumber(
 
         /* Check our own ports. */
         for (ULONG i = 0; i < GCOM_MAX_PORTS; i++) {
-            if (DevCtx->Ports[i] &&
+            if (GCOM_PORT_IS_VALID(DevCtx->Ports[i]) &&
                 DevCtx->Ports[i]->Active &&
                 DevCtx->Ports[i]->PortNumber == candidate)
             {
@@ -98,7 +98,7 @@ GcomPortPairCreate(
     *OutPortPair = NULL;
 
     /* Find a free slot in the port table. */
-    WdfSpinLockAcquire(DevCtx->PortTableLock);
+    WdfWaitLockAcquire(DevCtx->PortTableLock, NULL);
 
     slotIndex = GCOM_MAX_PORTS;
     for (ULONG i = 0; i < GCOM_MAX_PORTS; i++) {
@@ -109,7 +109,7 @@ GcomPortPairCreate(
     }
 
     if (slotIndex == GCOM_MAX_PORTS) {
-        WdfSpinLockRelease(DevCtx->PortTableLock);
+        WdfWaitLockRelease(DevCtx->PortTableLock);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -118,11 +118,11 @@ GcomPortPairCreate(
     if (RequestedPortNumber != 0) {
         /* Check if the requested number is already in use. */
         for (ULONG i = 0; i < GCOM_MAX_PORTS; i++) {
-            if (DevCtx->Ports[i] &&
+            if (GCOM_PORT_IS_VALID(DevCtx->Ports[i]) &&
                 DevCtx->Ports[i]->Active &&
                 DevCtx->Ports[i]->PortNumber == RequestedPortNumber)
             {
-                WdfSpinLockRelease(DevCtx->PortTableLock);
+                WdfWaitLockRelease(DevCtx->PortTableLock);
                 return STATUS_OBJECT_NAME_COLLISION;
             }
         }
@@ -130,14 +130,22 @@ GcomPortPairCreate(
     } else {
         portNumber = GcomFindFreePortNumber(DevCtx);
         if (portNumber == 0) {
-            WdfSpinLockRelease(DevCtx->PortTableLock);
+            WdfWaitLockRelease(DevCtx->PortTableLock);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
     }
 
     ULONG companionIndex = (ULONG)InterlockedIncrement(&DevCtx->NextCompanionIndex) - 1;
 
-    WdfSpinLockRelease(DevCtx->PortTableLock);
+    /*
+     * Reserve the slot with a sentinel before releasing the lock.
+     * This prevents another concurrent create from claiming the
+     * same slot (TOCTOU fix).
+     */
+    DevCtx->Ports[slotIndex] = GCOM_PORT_RESERVED;
+    DevCtx->PortCount++;
+
+    WdfWaitLockRelease(DevCtx->PortTableLock);
 
     /* Allocate the port pair structure. */
     pp = (PGCOM_PORT_PAIR)ExAllocatePool2(
@@ -146,39 +154,42 @@ GcomPortPairCreate(
         GCOM_POOL_TAG
     );
     if (!pp) {
+        WdfWaitLockAcquire(DevCtx->PortTableLock, NULL);
+        DevCtx->Ports[slotIndex] = NULL;
+        DevCtx->PortCount--;
+        WdfWaitLockRelease(DevCtx->PortTableLock);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     RtlZeroMemory(pp, sizeof(GCOM_PORT_PAIR));
     pp->PortNumber = portNumber;
     pp->CompanionIndex = companionIndex;
-    pp->Active = TRUE;
+    InterlockedExchange(&pp->Active, TRUE);
     pp->RefCount = 1;
 
     /* Initialize ring buffers. */
     status = GcomRingInit(&pp->ComToCompanion, GCOM_RING_BUFFER_SIZE);
     if (!NT_SUCCESS(status)) {
-        ExFreePoolWithTag(pp, GCOM_POOL_TAG);
-        return status;
+        goto fail_alloc;
     }
 
     status = GcomRingInit(&pp->CompanionToCom, GCOM_RING_BUFFER_SIZE);
     if (!NT_SUCCESS(status)) {
-        GcomRingFree(&pp->ComToCompanion);
-        ExFreePoolWithTag(pp, GCOM_POOL_TAG);
-        return status;
+        goto fail_alloc;
     }
 
-    /* Initialize default signal state. */
+    /* Initialize locks. */
     WDF_OBJECT_ATTRIBUTES lockAttr;
     WDF_OBJECT_ATTRIBUTES_INIT(&lockAttr);
 
     status = WdfSpinLockCreate(&lockAttr, &pp->SignalLock);
     if (!NT_SUCCESS(status)) {
-        GcomRingFree(&pp->CompanionToCom);
-        GcomRingFree(&pp->ComToCompanion);
-        ExFreePoolWithTag(pp, GCOM_POOL_TAG);
-        return status;
+        goto fail_alloc;
+    }
+
+    status = WdfSpinLockCreate(&lockAttr, &pp->DataLock);
+    if (!NT_SUCCESS(status)) {
+        goto fail_alloc;
     }
 
     pp->SignalState.BaudRate = 9600;
@@ -195,12 +206,11 @@ GcomPortPairCreate(
     pp->Timeouts.WriteTotalTimeoutMultiplier = 0;
     pp->Timeouts.WriteTotalTimeoutConstant = 0;
 
-    /* Store in the table BEFORE creating devices, so that if device
-     * creation callbacks reference the table, the entry exists. */
-    WdfSpinLockAcquire(DevCtx->PortTableLock);
+    /* Replace the sentinel with the real pointer BEFORE creating
+     * devices, so that device creation callbacks can find the entry. */
+    WdfWaitLockAcquire(DevCtx->PortTableLock, NULL);
     DevCtx->Ports[slotIndex] = pp;
-    DevCtx->PortCount++;
-    WdfSpinLockRelease(DevCtx->PortTableLock);
+    WdfWaitLockRelease(DevCtx->PortTableLock);
 
     /* ── Create the COM port device (\\.\COM<N>) ────────────── */
 
@@ -227,14 +237,32 @@ GcomPortPairCreate(
     return STATUS_SUCCESS;
 
 fail_cleanup:
-    /* Remove from table. */
-    WdfSpinLockAcquire(DevCtx->PortTableLock);
+    /* Remove from table (entry holds the real pp pointer). */
+    WdfWaitLockAcquire(DevCtx->PortTableLock, NULL);
     DevCtx->Ports[slotIndex] = NULL;
     DevCtx->PortCount--;
-    WdfSpinLockRelease(DevCtx->PortTableLock);
+    WdfWaitLockRelease(DevCtx->PortTableLock);
 
+fail_alloc:
+    /* Clean up partially-initialized port pair.
+     * All fields are zero-initialized, so NULL/0 checks are safe. */
+    if (pp->DataLock) {
+        WdfObjectDelete(pp->DataLock);
+    }
+    if (pp->SignalLock) {
+        WdfObjectDelete(pp->SignalLock);
+    }
     GcomRingFree(&pp->CompanionToCom);
     GcomRingFree(&pp->ComToCompanion);
+
+    /* Release the sentinel slot if we haven't stored the real pointer yet. */
+    if (DevCtx->Ports[slotIndex] == GCOM_PORT_RESERVED) {
+        WdfWaitLockAcquire(DevCtx->PortTableLock, NULL);
+        DevCtx->Ports[slotIndex] = NULL;
+        DevCtx->PortCount--;
+        WdfWaitLockRelease(DevCtx->PortTableLock);
+    }
+
     ExFreePoolWithTag(pp, GCOM_POOL_TAG);
 
     return status;
@@ -249,10 +277,10 @@ GcomPortPairDestroy(
     _In_ PGCOM_PORT_PAIR PortPair
 )
 {
-    PortPair->Active = FALSE;
+    InterlockedExchange(&PortPair->Active, FALSE);
 
-    /* Remove from the port table. */
-    WdfSpinLockAcquire(DevCtx->PortTableLock);
+    /* Remove from the port table (idempotent — may already be removed). */
+    WdfWaitLockAcquire(DevCtx->PortTableLock, NULL);
     for (ULONG i = 0; i < GCOM_MAX_PORTS; i++) {
         if (DevCtx->Ports[i] == PortPair) {
             DevCtx->Ports[i] = NULL;
@@ -260,7 +288,7 @@ GcomPortPairDestroy(
             break;
         }
     }
-    WdfSpinLockRelease(DevCtx->PortTableLock);
+    WdfWaitLockRelease(DevCtx->PortTableLock);
 
     /* Cancel all pending I/O. */
     if (PortPair->ComReadQueue) {
@@ -289,6 +317,14 @@ GcomPortPairDestroy(
     /* Delete symbolic links and devices. */
     GcomComPortDestroy(PortPair);
     GcomCompanionDestroy(PortPair);
+
+    /* Delete WDF lock objects (they have no automatic parent). */
+    if (PortPair->DataLock) {
+        WdfObjectDelete(PortPair->DataLock);
+    }
+    if (PortPair->SignalLock) {
+        WdfObjectDelete(PortPair->SignalLock);
+    }
 
     TraceEvents(0, 0, "Port pair destroyed: COM%lu", PortPair->PortNumber);
 
@@ -344,9 +380,10 @@ GcomSignalChanged(
         }
     }
 
-    /* Clear the changed mask after notifying all waiters. */
+    /* Clear only the bits that were actually delivered to waiters.
+     * Any new bits set between the snapshot and now are preserved. */
     WdfSpinLockAcquire(PortPair->SignalLock);
-    PortPair->SignalState.ChangedMask = 0;
+    PortPair->SignalState.ChangedMask &= ~snapshot.ChangedMask;
     WdfSpinLockRelease(PortPair->SignalLock);
 }
 

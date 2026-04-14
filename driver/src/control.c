@@ -50,7 +50,7 @@ GcomControlDeviceCreate(
      */
     controlInit = WdfControlDeviceInitAllocate(
         WdfDeviceGetDriver(ParentDevice),
-        &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX  /* All users can R/W */
+        &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_R_RES_R  /* Admins RWX, users read-only */
     );
     if (!controlInit) {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -191,26 +191,29 @@ GcomHandleDestroyPort(
         return;
     }
 
-    /* Find the port pair by companion index. */
+    /* Find and atomically remove the port pair by companion index. */
     PGCOM_PORT_PAIR portPair = NULL;
 
-    WdfSpinLockAcquire(DevCtx->PortTableLock);
+    WdfWaitLockAcquire(DevCtx->PortTableLock, NULL);
     for (ULONG i = 0; i < GCOM_MAX_PORTS; i++) {
-        if (DevCtx->Ports[i] &&
+        if (GCOM_PORT_IS_VALID(DevCtx->Ports[i]) &&
             DevCtx->Ports[i]->CompanionIndex == input->CompanionIndex &&
             DevCtx->Ports[i]->Active)
         {
             portPair = DevCtx->Ports[i];
+            DevCtx->Ports[i] = NULL;
+            DevCtx->PortCount--;
             break;
         }
     }
-    WdfSpinLockRelease(DevCtx->PortTableLock);
+    WdfWaitLockRelease(DevCtx->PortTableLock);
 
     if (!portPair) {
         WdfRequestComplete(Request, STATUS_NOT_FOUND);
         return;
     }
 
+    InterlockedExchange(&portPair->Active, FALSE);
     GcomPortPairDestroy(DevCtx, portPair);
 
     WdfRequestComplete(Request, STATUS_SUCCESS);
@@ -253,9 +256,9 @@ GcomHandleListPorts(
 
     ULONG count = 0;
 
-    WdfSpinLockAcquire(DevCtx->PortTableLock);
+    WdfWaitLockAcquire(DevCtx->PortTableLock, NULL);
     for (ULONG i = 0; i < GCOM_MAX_PORTS && count < maxEntries; i++) {
-        if (DevCtx->Ports[i] && DevCtx->Ports[i]->Active) {
+        if (GCOM_PORT_IS_VALID(DevCtx->Ports[i]) && DevCtx->Ports[i]->Active) {
             PGCOM_PORT_PAIR pp = DevCtx->Ports[i];
             entries[count].PortNumber = pp->PortNumber;
             entries[count].CompanionIndex = pp->CompanionIndex;
@@ -264,7 +267,7 @@ GcomHandleListPorts(
             count++;
         }
     }
-    WdfSpinLockRelease(DevCtx->PortTableLock);
+    WdfWaitLockRelease(DevCtx->PortTableLock);
 
     header->Count = count;
 

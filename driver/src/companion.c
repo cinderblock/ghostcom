@@ -89,7 +89,7 @@ GcomCompanionCreate(
 
     deviceInit = WdfControlDeviceInitAllocate(
         Driver,
-        &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX  /* All users can R/W */
+        &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R  /* Admins RWX, users RW */
     );
     if (!deviceInit) {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -265,22 +265,27 @@ GcomCompEvtRead(
         return;
     }
 
+    WdfSpinLockAcquire(pp->DataLock);
+
     ULONG bytesRead = GcomRingRead(&pp->ComToCompanion,
                                     (PUCHAR)outputBuf,
                                     (ULONG)min(outputLen, Length));
 
     if (bytesRead > 0) {
-        WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, bytesRead);
-
         /* Unblock any pending COM-side writes. */
         if (pp->ComWriteQueue) {
             GcomDrainWritesToRing(&pp->ComToCompanion,
                                   pp->ComWriteQueue,
                                   pp->CompReadQueue);
         }
+        WdfSpinLockRelease(pp->DataLock);
+
+        WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, bytesRead);
     } else {
         /* No data available — pend the request (overlapped ReadFile). */
         st = WdfRequestForwardToIoQueue(Request, pp->CompReadQueue);
+        WdfSpinLockRelease(pp->DataLock);
+
         if (!NT_SUCCESS(st)) {
             WdfRequestComplete(Request, st);
         }
@@ -316,23 +321,28 @@ GcomCompEvtWrite(
         return;
     }
 
+    WdfSpinLockAcquire(pp->DataLock);
+
     ULONG bytesWritten = GcomRingWrite(&pp->CompanionToCom,
                                         (const PUCHAR)inputBuf,
                                         (ULONG)min(inputLen, Length));
 
     if (bytesWritten > 0) {
-        WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, bytesWritten);
-
         /* Wake up pending COM-side reads. */
         if (pp->ComReadQueue) {
             GcomDrainRingToReads(&pp->CompanionToCom, pp->ComReadQueue);
         }
+        WdfSpinLockRelease(pp->DataLock);
+
+        WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, bytesWritten);
 
         /* Notify WaitCommEvent (EV_RXCHAR) on the COM side. */
         GcomCheckWaitMask(pp, SERIAL_EV_RXCHAR);
     } else {
         /* Ring buffer full — pend the write. */
         st = WdfRequestForwardToIoQueue(Request, pp->CompWriteQueue);
+        WdfSpinLockRelease(pp->DataLock);
+
         if (!NT_SUCCESS(st)) {
             WdfRequestComplete(Request, st);
         }
@@ -420,11 +430,13 @@ GcomCompEvtIoctl(
             (PVOID*)&input, NULL
         );
         if (NT_SUCCESS(status)) {
+            WdfSpinLockAcquire(pp->SignalLock);
             BOOLEAN oldDtr = pp->CompDtr;
             BOOLEAN oldRts = pp->CompRts;
 
             pp->CompDtr = input->DtrState ? TRUE : FALSE;
             pp->CompRts = input->RtsState ? TRUE : FALSE;
+            WdfSpinLockRelease(pp->SignalLock);
 
             /*
              * If companion signals changed, notify the COM side's

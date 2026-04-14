@@ -58,13 +58,21 @@
 typedef struct _GCOM_PORT_PAIR   GCOM_PORT_PAIR,   *PGCOM_PORT_PAIR;
 typedef struct _GCOM_DEVICE_CTX  GCOM_DEVICE_CTX,  *PGCOM_DEVICE_CTX;
 
+/*
+ * Sentinel value stored in Ports[] to reserve a slot during port pair
+ * creation.  All table scans must use GCOM_PORT_IS_VALID() before
+ * dereferencing a Ports[] entry.
+ */
+#define GCOM_PORT_RESERVED  ((PGCOM_PORT_PAIR)(ULONG_PTR)1)
+#define GCOM_PORT_IS_VALID(p) ((p) != NULL && (p) != GCOM_PORT_RESERVED)
+
 /* ── Port pair — one COM device + one companion device ────────── */
 
 typedef struct _GCOM_PORT_PAIR {
     /* Identification */
     ULONG               PortNumber;       /* COM port number (e.g., 10) */
     ULONG               CompanionIndex;   /* Companion device index */
-    BOOLEAN              Active;
+    volatile LONG        Active;
 
     /* Device objects */
     WDFDEVICE            ComDevice;        /* The serial port device */
@@ -91,6 +99,9 @@ typedef struct _GCOM_PORT_PAIR {
     /* Signal state (COM side configuration) */
     GCOM_SIGNAL_STATE    SignalState;
     WDFSPINLOCK          SignalLock;
+
+    /* Data lock — serializes all ring buffer operations across both sides. */
+    WDFSPINLOCK          DataLock;
 
     /* Companion-side output signals (null-modem crossover) */
     BOOLEAN              CompDtr;          /* Companion DTR → COM sees DSR+DCD */
@@ -120,7 +131,7 @@ typedef struct _GCOM_DEVICE_CTX {
     /* Port pair table */
     PGCOM_PORT_PAIR      Ports[GCOM_MAX_PORTS];
     ULONG                PortCount;
-    WDFSPINLOCK          PortTableLock;
+    WDFWAITLOCK           PortTableLock;
 
     /* Control device */
     WDFDEVICE            ControlDevice;

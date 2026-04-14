@@ -87,10 +87,21 @@ GcomEvtSelfManagedIoCleanup(
     TraceEvents(0, 0, "SelfManagedIoCleanup — destroying all port pairs");
 
     /* Tear down all active port pairs on driver stop/unload. */
+    WdfWaitLockAcquire(devCtx->PortTableLock, NULL);
+    PGCOM_PORT_PAIR toDestroy[GCOM_MAX_PORTS];
+    ULONG destroyCount = 0;
     for (ULONG i = 0; i < GCOM_MAX_PORTS; i++) {
-        if (devCtx->Ports[i] && devCtx->Ports[i]->Active) {
-            GcomPortPairDestroy(devCtx, devCtx->Ports[i]);
+        if (GCOM_PORT_IS_VALID(devCtx->Ports[i]) && devCtx->Ports[i]->Active) {
+            toDestroy[destroyCount++] = devCtx->Ports[i];
+            devCtx->Ports[i] = NULL;
+            devCtx->PortCount--;
         }
+    }
+    WdfWaitLockRelease(devCtx->PortTableLock);
+
+    for (ULONG i = 0; i < destroyCount; i++) {
+        InterlockedExchange(&toDestroy[i]->Active, FALSE);
+        GcomPortPairDestroy(devCtx, toDestroy[i]);
     }
 }
 
@@ -171,7 +182,7 @@ GcomEvtDeviceAdd(
     WDF_OBJECT_ATTRIBUTES_INIT(&lockAttributes);
     lockAttributes.ParentObject = device;
 
-    status = WdfSpinLockCreate(&lockAttributes, &devCtx->PortTableLock);
+    status = WdfWaitLockCreate(&lockAttributes, &devCtx->PortTableLock);
     if (!NT_SUCCESS(status)) {
         TraceEvents(0, 0, "WdfSpinLockCreate (PortTableLock) failed: 0x%08X", status);
         return status;

@@ -32,17 +32,22 @@ GcomComEvtFileCreate(
     PGCOM_PORT_DEVICE_CTX devCtx = GcomGetPortDeviceContext(Device);
     PGCOM_PORT_PAIR pp = devCtx->PortPair;
 
+    /* Enforce exclusive access — only one COM-side open at a time. */
+    if (InterlockedCompareExchange(&pp->ComSideOpen, 1, 0) != 0) {
+        TraceEvents(0, 0, "COM%lu: rejected (already open)", pp->PortNumber);
+        WdfRequestComplete(Request, STATUS_SHARING_VIOLATION);
+        return;
+    }
+
     /* Set up the file context so I/O handlers can find the port pair. */
     PGCOM_FILE_CTX fileCtx = GcomGetFileContext(FileObject);
     fileCtx->FileType = GcomFileTypeCom;
     fileCtx->PortPair = pp;
 
-    InterlockedIncrement(&pp->ComSideOpen);
-
     /* Notify the companion side that the COM port was opened. */
     GcomSignalChanged(pp, GCOM_CHANGED_COM_OPEN);
 
-    TraceEvents(0, 0, "COM%lu opened (count=%ld)", pp->PortNumber, pp->ComSideOpen);
+    TraceEvents(0, 0, "COM%lu opened", pp->PortNumber);
 
     WdfRequestComplete(Request, STATUS_SUCCESS);
 }
@@ -56,9 +61,9 @@ GcomComEvtFileClose(
     PGCOM_PORT_PAIR pp = fileCtx->PortPair;
 
     if (pp) {
-        InterlockedDecrement(&pp->ComSideOpen);
+        InterlockedExchange(&pp->ComSideOpen, 0);
         GcomSignalChanged(pp, GCOM_CHANGED_COM_CLOSE);
-        TraceEvents(0, 0, "COM%lu closed (count=%ld)", pp->PortNumber, pp->ComSideOpen);
+        TraceEvents(0, 0, "COM%lu closed", pp->PortNumber);
     }
 }
 
@@ -86,7 +91,7 @@ GcomComPortCreate(
 
     deviceInit = WdfControlDeviceInitAllocate(
         Driver,
-        &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX  /* All users can R/W */
+        &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R  /* Admins RWX, users RW */
     );
     if (!deviceInit) {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -320,24 +325,28 @@ GcomComEvtRead(
         return;
     }
 
+    WdfSpinLockAcquire(pp->DataLock);
+
     ULONG bytesRead = GcomRingRead(&pp->CompanionToCom,
                                     (PUCHAR)outputBuf,
                                     (ULONG)min(outputLen, Length));
 
     if (bytesRead > 0) {
-        WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, bytesRead);
-
         /* Unblock any pending companion writes. */
         if (pp->CompWriteQueue) {
             GcomDrainWritesToRing(&pp->CompanionToCom,
                                   pp->CompWriteQueue,
                                   pp->ComReadQueue);
         }
-
         pp->PerfStats.ReceivedCount += bytesRead;
+        WdfSpinLockRelease(pp->DataLock);
+
+        WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, bytesRead);
     } else {
         /* No data available — pend the request. */
         st = WdfRequestForwardToIoQueue(Request, pp->ComReadQueue);
+        WdfSpinLockRelease(pp->DataLock);
+
         if (!NT_SUCCESS(st)) {
             WdfRequestComplete(Request, st);
         }
@@ -373,31 +382,52 @@ GcomComEvtWrite(
         return;
     }
 
+    WdfSpinLockAcquire(pp->DataLock);
+
     ULONG bytesWritten = GcomRingWrite(&pp->ComToCompanion,
                                         (const PUCHAR)inputBuf,
                                         (ULONG)min(inputLen, Length));
 
     if (bytesWritten > 0) {
-        WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, bytesWritten);
-
         /* Wake up pending companion reads. */
         if (pp->CompReadQueue) {
             GcomDrainRingToReads(&pp->ComToCompanion, pp->CompReadQueue);
         }
 
+        BOOLEAN ringEmpty = GcomRingIsEmpty(&pp->ComToCompanion);
+        pp->PerfStats.TransmittedCount += bytesWritten;
+        WdfSpinLockRelease(pp->DataLock);
+
+        WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, bytesWritten);
+
         /* Notify WaitCommEvent (EV_TXEMPTY when ring drains). */
-        if (GcomRingIsEmpty(&pp->ComToCompanion)) {
+        if (ringEmpty) {
             GcomCheckWaitMask(pp, SERIAL_EV_TXEMPTY);
         }
-
-        pp->PerfStats.TransmittedCount += bytesWritten;
     } else {
         /* Ring buffer full — pend the write. */
         st = WdfRequestForwardToIoQueue(Request, pp->ComWriteQueue);
+        WdfSpinLockRelease(pp->DataLock);
+
         if (!NT_SUCCESS(st)) {
             WdfRequestComplete(Request, st);
         }
     }
+}
+
+
+/* ── Queue purge completion — restart the queue ──────────────── */
+
+static EVT_WDF_IO_QUEUE_STATE GcomQueuePurgeComplete;
+
+static VOID
+GcomQueuePurgeComplete(
+    _In_ WDFQUEUE Queue,
+    _In_ WDFCONTEXT Context
+)
+{
+    UNREFERENCED_PARAMETER(Context);
+    WdfIoQueueStart(Queue);
 }
 
 
@@ -454,7 +484,9 @@ GcomComEvtIoctl(
         status = WdfRequestRetrieveOutputBuffer(Request, sizeof(SERIAL_BAUD_RATE),
                                                  (PVOID*)&br, NULL);
         if (NT_SUCCESS(status)) {
+            WdfSpinLockAcquire(pp->SignalLock);
             br->BaudRate = pp->SignalState.BaudRate;
+            WdfSpinLockRelease(pp->SignalLock);
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
                                               sizeof(SERIAL_BAUD_RATE));
         } else {
@@ -490,9 +522,11 @@ GcomComEvtIoctl(
         status = WdfRequestRetrieveOutputBuffer(Request, sizeof(SERIAL_LINE_CONTROL),
                                                  (PVOID*)&lc, NULL);
         if (NT_SUCCESS(status)) {
+            WdfSpinLockAcquire(pp->SignalLock);
             lc->StopBits = pp->SignalState.StopBits;
             lc->Parity = pp->SignalState.Parity;
             lc->WordLength = pp->SignalState.DataBits;
+            WdfSpinLockRelease(pp->SignalLock);
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
                                               sizeof(SERIAL_LINE_CONTROL));
         } else {
@@ -562,7 +596,9 @@ GcomComEvtIoctl(
         status = WdfRequestRetrieveInputBuffer(Request, sizeof(SERIAL_TIMEOUTS),
                                                 (PVOID*)&to, NULL);
         if (NT_SUCCESS(status)) {
+            WdfSpinLockAcquire(pp->SignalLock);
             pp->Timeouts = *to;
+            WdfSpinLockRelease(pp->SignalLock);
             WdfRequestComplete(Request, STATUS_SUCCESS);
         } else {
             WdfRequestComplete(Request, status);
@@ -576,7 +612,9 @@ GcomComEvtIoctl(
         status = WdfRequestRetrieveOutputBuffer(Request, sizeof(SERIAL_TIMEOUTS),
                                                  (PVOID*)&to, NULL);
         if (NT_SUCCESS(status)) {
+            WdfSpinLockAcquire(pp->SignalLock);
             *to = pp->Timeouts;
+            WdfSpinLockRelease(pp->SignalLock);
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
                                               sizeof(SERIAL_TIMEOUTS));
         } else {
@@ -613,10 +651,12 @@ GcomComEvtIoctl(
         status = WdfRequestRetrieveOutputBuffer(Request, sizeof(SERIAL_HANDFLOW),
                                                  (PVOID*)&hf, NULL);
         if (NT_SUCCESS(status)) {
+            WdfSpinLockAcquire(pp->SignalLock);
             hf->ControlHandShake = pp->SignalState.ControlHandShake;
             hf->FlowReplace = pp->SignalState.FlowReplace;
             hf->XonLimit = pp->SignalState.XonLimit;
             hf->XoffLimit = pp->SignalState.XoffLimit;
+            WdfSpinLockRelease(pp->SignalLock);
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
                                               sizeof(SERIAL_HANDFLOW));
         } else {
@@ -655,12 +695,14 @@ GcomComEvtIoctl(
         status = WdfRequestRetrieveOutputBuffer(Request, sizeof(SERIAL_CHARS),
                                                  (PVOID*)&ch, NULL);
         if (NT_SUCCESS(status)) {
+            WdfSpinLockAcquire(pp->SignalLock);
             ch->EofChar = pp->SignalState.EofChar;
             ch->ErrorChar = pp->SignalState.ErrorChar;
             ch->BreakChar = pp->SignalState.BreakChar;
             ch->EventChar = pp->SignalState.EventChar;
             ch->XonChar = pp->SignalState.XonChar;
             ch->XoffChar = pp->SignalState.XoffChar;
+            WdfSpinLockRelease(pp->SignalLock);
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
                                               sizeof(SERIAL_CHARS));
         } else {
@@ -682,9 +724,11 @@ GcomComEvtIoctl(
             WdfSpinLockRelease(pp->SignalLock);
 
             /* Cancel any pending WAIT_ON_MASK requests — per spec,
-             * setting a new mask cancels previous waits. */
+             * setting a new mask cancels previous waits.
+             * The purge callback restarts the queue so new waits work. */
             if (pp->WaitMaskQueue) {
-                WdfIoQueuePurge(pp->WaitMaskQueue, NULL, NULL);
+                WdfIoQueuePurge(pp->WaitMaskQueue,
+                                GcomQueuePurgeComplete, NULL);
             }
 
             GcomSignalChanged(pp, GCOM_CHANGED_WAIT_MASK);
@@ -701,7 +745,9 @@ GcomComEvtIoctl(
         status = WdfRequestRetrieveOutputBuffer(Request, sizeof(ULONG),
                                                  (PVOID*)&mask, NULL);
         if (NT_SUCCESS(status)) {
+            WdfSpinLockAcquire(pp->SignalLock);
             *mask = pp->SignalState.WaitMask;
+            WdfSpinLockRelease(pp->SignalLock);
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
                                               sizeof(ULONG));
         } else {
@@ -729,12 +775,14 @@ GcomComEvtIoctl(
                                                  (PVOID*)&modemStatus, NULL);
         if (NT_SUCCESS(status)) {
             ULONG ms = 0;
+            WdfSpinLockAcquire(pp->SignalLock);
             if (pp->CompDtr) {
                 ms |= SERIAL_DSR_STATE | SERIAL_DCD_STATE;
             }
             if (pp->CompRts) {
                 ms |= SERIAL_CTS_STATE;
             }
+            WdfSpinLockRelease(pp->SignalLock);
             *modemStatus = ms;
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
                                               sizeof(ULONG));
@@ -753,8 +801,10 @@ GcomComEvtIoctl(
                                                  (PVOID*)&ss, NULL);
         if (NT_SUCCESS(status)) {
             RtlZeroMemory(ss, sizeof(SERIAL_STATUS));
+            WdfSpinLockAcquire(pp->DataLock);
             ss->AmountInInQueue = GcomRingReadAvailable(&pp->CompanionToCom);
             ss->AmountInOutQueue = GcomRingReadAvailable(&pp->ComToCompanion);
+            WdfSpinLockRelease(pp->DataLock);
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
                                               sizeof(SERIAL_STATUS));
         } else {
@@ -824,16 +874,22 @@ GcomComEvtIoctl(
                                                 (PVOID*)&flags, NULL);
         if (NT_SUCCESS(status)) {
             if (*flags & SERIAL_PURGE_TXABORT && pp->ComWriteQueue) {
-                WdfIoQueuePurge(pp->ComWriteQueue, NULL, NULL);
+                WdfIoQueuePurge(pp->ComWriteQueue,
+                                GcomQueuePurgeComplete, NULL);
             }
             if (*flags & SERIAL_PURGE_RXABORT && pp->ComReadQueue) {
-                WdfIoQueuePurge(pp->ComReadQueue, NULL, NULL);
+                WdfIoQueuePurge(pp->ComReadQueue,
+                                GcomQueuePurgeComplete, NULL);
             }
-            if (*flags & SERIAL_PURGE_TXCLEAR) {
-                GcomRingFlush(&pp->ComToCompanion);
-            }
-            if (*flags & SERIAL_PURGE_RXCLEAR) {
-                GcomRingFlush(&pp->CompanionToCom);
+            if (*flags & (SERIAL_PURGE_TXCLEAR | SERIAL_PURGE_RXCLEAR)) {
+                WdfSpinLockAcquire(pp->DataLock);
+                if (*flags & SERIAL_PURGE_TXCLEAR) {
+                    GcomRingFlush(&pp->ComToCompanion);
+                }
+                if (*flags & SERIAL_PURGE_RXCLEAR) {
+                    GcomRingFlush(&pp->CompanionToCom);
+                }
+                WdfSpinLockRelease(pp->DataLock);
             }
             WdfRequestComplete(Request, STATUS_SUCCESS);
         } else {
@@ -857,8 +913,10 @@ GcomComEvtIoctl(
                                                  (PVOID*)&dtrrts, NULL);
         if (NT_SUCCESS(status)) {
             ULONG val = 0;
+            WdfSpinLockAcquire(pp->SignalLock);
             if (pp->SignalState.DtrState) val |= SERIAL_DTR_STATE;
             if (pp->SignalState.RtsState) val |= SERIAL_RTS_STATE;
+            WdfSpinLockRelease(pp->SignalLock);
             *dtrrts = val;
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
                                               sizeof(ULONG));
@@ -876,7 +934,9 @@ GcomComEvtIoctl(
         status = WdfRequestRetrieveOutputBuffer(Request, sizeof(SERIALPERF_STATS),
                                                  (PVOID*)&stats, NULL);
         if (NT_SUCCESS(status)) {
+            WdfSpinLockAcquire(pp->DataLock);
             *stats = pp->PerfStats;
+            WdfSpinLockRelease(pp->DataLock);
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
                                               sizeof(SERIALPERF_STATS));
         } else {
@@ -886,7 +946,9 @@ GcomComEvtIoctl(
     }
 
     case IOCTL_SERIAL_CLEAR_STATS:
+        WdfSpinLockAcquire(pp->DataLock);
         RtlZeroMemory(&pp->PerfStats, sizeof(SERIALPERF_STATS));
+        WdfSpinLockRelease(pp->DataLock);
         WdfRequestComplete(Request, STATUS_SUCCESS);
         return;
 
@@ -909,10 +971,12 @@ GcomComEvtIoctl(
         status = WdfRequestRetrieveInputBuffer(Request, sizeof(UCHAR),
                                                 (PVOID*)&ch, NULL);
         if (NT_SUCCESS(status)) {
+            WdfSpinLockAcquire(pp->DataLock);
             GcomRingWrite(&pp->ComToCompanion, ch, 1);
             if (pp->CompReadQueue) {
                 GcomDrainRingToReads(&pp->ComToCompanion, pp->CompReadQueue);
             }
+            WdfSpinLockRelease(pp->DataLock);
             WdfRequestComplete(Request, STATUS_SUCCESS);
         } else {
             WdfRequestComplete(Request, status);
@@ -946,8 +1010,10 @@ GcomComEvtIoctl(
                                                  (PVOID*)&mcr, NULL);
         if (NT_SUCCESS(status)) {
             ULONG val = 0;
+            WdfSpinLockAcquire(pp->SignalLock);
             if (pp->SignalState.DtrState) val |= SERIAL_MCR_DTR;
             if (pp->SignalState.RtsState) val |= SERIAL_MCR_RTS;
+            WdfSpinLockRelease(pp->SignalLock);
             *mcr = val;
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
                                               sizeof(ULONG));

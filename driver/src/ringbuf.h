@@ -44,7 +44,10 @@ GcomRingInit(
     _In_  ULONG Size
 )
 {
-    /* Verify power of 2 */
+    /* Verify power of 2 — runtime check (NT_ASSERT is stripped in release). */
+    if (Size == 0 || (Size & (Size - 1)) != 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
     NT_ASSERT((Size & (Size - 1)) == 0);
 
     Ring->Buffer = (PUCHAR)ExAllocatePool2(
