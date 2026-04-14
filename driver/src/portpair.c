@@ -2,7 +2,7 @@
  * portpair.c — Port pair lifecycle and data transfer coordination.
  *
  * A port pair consists of a COM device (opened by external apps) and
- * a companion device (opened by the node-null addon). This file
+ * a companion device (opened by the GhostCOM addon). This file
  * manages creation, destruction, data transfer between ring buffers
  * and I/O queues, and signal change notifications.
  */
@@ -12,13 +12,13 @@
 /* ── Tracing ──────────────────────────────────────────────────── */
 
 #define TraceEvents(level, flag, msg, ...) \
-    KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL, "node-null [PAIR]: " msg "\n", ##__VA_ARGS__))
+    KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL, "ghostcom [PAIR]: " msg "\n", ##__VA_ARGS__))
 
 /* ── Find an unused COM port number ───────────────────────────── */
 
 ULONG
-VcomFindFreePortNumber(
-    _In_ PVCOM_DEVICE_CTX DevCtx
+GcomFindFreePortNumber(
+    _In_ PGCOM_DEVICE_CTX DevCtx
 )
 {
     /*
@@ -29,7 +29,7 @@ VcomFindFreePortNumber(
         BOOLEAN inUse = FALSE;
 
         /* Check our own ports. */
-        for (ULONG i = 0; i < VCOM_MAX_PORTS; i++) {
+        for (ULONG i = 0; i < GCOM_MAX_PORTS; i++) {
             if (DevCtx->Ports[i] &&
                 DevCtx->Ports[i]->Active &&
                 DevCtx->Ports[i]->PortNumber == candidate)
@@ -84,15 +84,15 @@ VcomFindFreePortNumber(
 /* ── Create a port pair ───────────────────────────────────────── */
 
 NTSTATUS
-VcomPortPairCreate(
+GcomPortPairCreate(
     _In_  WDFDRIVER Driver,
-    _In_  PVCOM_DEVICE_CTX DevCtx,
+    _In_  PGCOM_DEVICE_CTX DevCtx,
     _In_  ULONG RequestedPortNumber,
-    _Out_ PVCOM_PORT_PAIR* OutPortPair
+    _Out_ PGCOM_PORT_PAIR* OutPortPair
 )
 {
     NTSTATUS status;
-    PVCOM_PORT_PAIR pp = NULL;
+    PGCOM_PORT_PAIR pp = NULL;
     ULONG slotIndex;
 
     *OutPortPair = NULL;
@@ -100,15 +100,15 @@ VcomPortPairCreate(
     /* Find a free slot in the port table. */
     WdfSpinLockAcquire(DevCtx->PortTableLock);
 
-    slotIndex = VCOM_MAX_PORTS;
-    for (ULONG i = 0; i < VCOM_MAX_PORTS; i++) {
+    slotIndex = GCOM_MAX_PORTS;
+    for (ULONG i = 0; i < GCOM_MAX_PORTS; i++) {
         if (DevCtx->Ports[i] == NULL) {
             slotIndex = i;
             break;
         }
     }
 
-    if (slotIndex == VCOM_MAX_PORTS) {
+    if (slotIndex == GCOM_MAX_PORTS) {
         WdfSpinLockRelease(DevCtx->PortTableLock);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -117,7 +117,7 @@ VcomPortPairCreate(
     ULONG portNumber;
     if (RequestedPortNumber != 0) {
         /* Check if the requested number is already in use. */
-        for (ULONG i = 0; i < VCOM_MAX_PORTS; i++) {
+        for (ULONG i = 0; i < GCOM_MAX_PORTS; i++) {
             if (DevCtx->Ports[i] &&
                 DevCtx->Ports[i]->Active &&
                 DevCtx->Ports[i]->PortNumber == RequestedPortNumber)
@@ -128,7 +128,7 @@ VcomPortPairCreate(
         }
         portNumber = RequestedPortNumber;
     } else {
-        portNumber = VcomFindFreePortNumber(DevCtx);
+        portNumber = GcomFindFreePortNumber(DevCtx);
         if (portNumber == 0) {
             WdfSpinLockRelease(DevCtx->PortTableLock);
             return STATUS_INSUFFICIENT_RESOURCES;
@@ -140,32 +140,32 @@ VcomPortPairCreate(
     WdfSpinLockRelease(DevCtx->PortTableLock);
 
     /* Allocate the port pair structure. */
-    pp = (PVCOM_PORT_PAIR)ExAllocatePool2(
+    pp = (PGCOM_PORT_PAIR)ExAllocatePool2(
         POOL_FLAG_NON_PAGED,
-        sizeof(VCOM_PORT_PAIR),
-        VCOM_POOL_TAG
+        sizeof(GCOM_PORT_PAIR),
+        GCOM_POOL_TAG
     );
     if (!pp) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    RtlZeroMemory(pp, sizeof(VCOM_PORT_PAIR));
+    RtlZeroMemory(pp, sizeof(GCOM_PORT_PAIR));
     pp->PortNumber = portNumber;
     pp->CompanionIndex = companionIndex;
     pp->Active = TRUE;
     pp->RefCount = 1;
 
     /* Initialize ring buffers. */
-    status = VcomRingInit(&pp->ComToCompanion, VCOM_RING_BUFFER_SIZE);
+    status = GcomRingInit(&pp->ComToCompanion, GCOM_RING_BUFFER_SIZE);
     if (!NT_SUCCESS(status)) {
-        ExFreePoolWithTag(pp, VCOM_POOL_TAG);
+        ExFreePoolWithTag(pp, GCOM_POOL_TAG);
         return status;
     }
 
-    status = VcomRingInit(&pp->CompanionToCom, VCOM_RING_BUFFER_SIZE);
+    status = GcomRingInit(&pp->CompanionToCom, GCOM_RING_BUFFER_SIZE);
     if (!NT_SUCCESS(status)) {
-        VcomRingFree(&pp->ComToCompanion);
-        ExFreePoolWithTag(pp, VCOM_POOL_TAG);
+        GcomRingFree(&pp->ComToCompanion);
+        ExFreePoolWithTag(pp, GCOM_POOL_TAG);
         return status;
     }
 
@@ -175,9 +175,9 @@ VcomPortPairCreate(
 
     status = WdfSpinLockCreate(&lockAttr, &pp->SignalLock);
     if (!NT_SUCCESS(status)) {
-        VcomRingFree(&pp->CompanionToCom);
-        VcomRingFree(&pp->ComToCompanion);
-        ExFreePoolWithTag(pp, VCOM_POOL_TAG);
+        GcomRingFree(&pp->CompanionToCom);
+        GcomRingFree(&pp->ComToCompanion);
+        ExFreePoolWithTag(pp, GCOM_POOL_TAG);
         return status;
     }
 
@@ -204,24 +204,24 @@ VcomPortPairCreate(
 
     /* ── Create the COM port device (\\.\COM<N>) ────────────── */
 
-    status = VcomComPortCreate(Driver, DevCtx, pp, portNumber);
+    status = GcomComPortCreate(Driver, DevCtx, pp, portNumber);
     if (!NT_SUCCESS(status)) {
-        TraceEvents(0, 0, "VcomComPortCreate failed: 0x%08X", status);
+        TraceEvents(0, 0, "GcomComPortCreate failed: 0x%08X", status);
         goto fail_cleanup;
     }
 
-    /* ── Create the companion device (\\.\VCOMCompanion<N>) ─── */
+    /* ── Create the companion device (\\.\GCOM<N>) ─── */
 
-    status = VcomCompanionCreate(Driver, DevCtx, pp);
+    status = GcomCompanionCreate(Driver, DevCtx, pp);
     if (!NT_SUCCESS(status)) {
-        TraceEvents(0, 0, "VcomCompanionCreate failed: 0x%08X", status);
-        VcomComPortDestroy(pp);
+        TraceEvents(0, 0, "GcomCompanionCreate failed: 0x%08X", status);
+        GcomComPortDestroy(pp);
         goto fail_cleanup;
     }
 
     *OutPortPair = pp;
 
-    TraceEvents(0, 0, "Port pair created: COM%lu ↔ VCOMCompanion%lu (slot %lu)",
+    TraceEvents(0, 0, "Port pair created: COM%lu ↔ GCOM%lu (slot %lu)",
                 portNumber, companionIndex, slotIndex);
 
     return STATUS_SUCCESS;
@@ -233,9 +233,9 @@ fail_cleanup:
     DevCtx->PortCount--;
     WdfSpinLockRelease(DevCtx->PortTableLock);
 
-    VcomRingFree(&pp->CompanionToCom);
-    VcomRingFree(&pp->ComToCompanion);
-    ExFreePoolWithTag(pp, VCOM_POOL_TAG);
+    GcomRingFree(&pp->CompanionToCom);
+    GcomRingFree(&pp->ComToCompanion);
+    ExFreePoolWithTag(pp, GCOM_POOL_TAG);
 
     return status;
 }
@@ -244,16 +244,16 @@ fail_cleanup:
 /* ── Destroy a port pair ──────────────────────────────────────── */
 
 VOID
-VcomPortPairDestroy(
-    _In_ PVCOM_DEVICE_CTX DevCtx,
-    _In_ PVCOM_PORT_PAIR PortPair
+GcomPortPairDestroy(
+    _In_ PGCOM_DEVICE_CTX DevCtx,
+    _In_ PGCOM_PORT_PAIR PortPair
 )
 {
     PortPair->Active = FALSE;
 
     /* Remove from the port table. */
     WdfSpinLockAcquire(DevCtx->PortTableLock);
-    for (ULONG i = 0; i < VCOM_MAX_PORTS; i++) {
+    for (ULONG i = 0; i < GCOM_MAX_PORTS; i++) {
         if (DevCtx->Ports[i] == PortPair) {
             DevCtx->Ports[i] = NULL;
             DevCtx->PortCount--;
@@ -283,24 +283,24 @@ VcomPortPairDestroy(
     }
 
     /* Free ring buffers. */
-    VcomRingFree(&PortPair->ComToCompanion);
-    VcomRingFree(&PortPair->CompanionToCom);
+    GcomRingFree(&PortPair->ComToCompanion);
+    GcomRingFree(&PortPair->CompanionToCom);
 
     /* Delete symbolic links and devices. */
-    VcomComPortDestroy(PortPair);
-    VcomCompanionDestroy(PortPair);
+    GcomComPortDestroy(PortPair);
+    GcomCompanionDestroy(PortPair);
 
     TraceEvents(0, 0, "Port pair destroyed: COM%lu", PortPair->PortNumber);
 
-    ExFreePoolWithTag(PortPair, VCOM_POOL_TAG);
+    ExFreePoolWithTag(PortPair, GCOM_POOL_TAG);
 }
 
 
 /* ── Signal change notification ───────────────────────────────── */
 
 VOID
-VcomSignalChanged(
-    _In_ PVCOM_PORT_PAIR PortPair,
+GcomSignalChanged(
+    _In_ PGCOM_PORT_PAIR PortPair,
     _In_ ULONG ChangedBits
 )
 {
@@ -314,7 +314,7 @@ VcomSignalChanged(
     PortPair->SignalState.SequenceNumber++;
     PortPair->SignalState.ChangedMask |= ChangedBits;
 
-    VCOM_SIGNAL_STATE snapshot = PortPair->SignalState;
+    GCOM_SIGNAL_STATE snapshot = PortPair->SignalState;
 
     WdfSpinLockRelease(PortPair->SignalLock);
 
@@ -324,11 +324,11 @@ VcomSignalChanged(
         while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(
                 PortPair->SignalWaitQueue, &waitReq)))
         {
-            PVCOM_SIGNAL_STATE output;
+            PGCOM_SIGNAL_STATE output;
             size_t outputLen;
             NTSTATUS st = WdfRequestRetrieveOutputBuffer(
                 waitReq,
-                sizeof(VCOM_SIGNAL_STATE),
+                sizeof(GCOM_SIGNAL_STATE),
                 (PVOID*)&output,
                 &outputLen
             );
@@ -336,7 +336,7 @@ VcomSignalChanged(
                 *output = snapshot;
                 WdfRequestCompleteWithInformation(
                     waitReq, STATUS_SUCCESS,
-                    sizeof(VCOM_SIGNAL_STATE)
+                    sizeof(GCOM_SIGNAL_STATE)
                 );
             } else {
                 WdfRequestComplete(waitReq, st);
@@ -354,14 +354,14 @@ VcomSignalChanged(
 /* ── Drain ring buffer to pending read IRPs ───────────────────── */
 
 VOID
-VcomDrainRingToReads(
-    _In_ PVCOM_RING_BUFFER Ring,
+GcomDrainRingToReads(
+    _In_ PGCOM_RING_BUFFER Ring,
     _In_ WDFQUEUE ReadQueue
 )
 {
     WDFREQUEST readReq;
 
-    while (!VcomRingIsEmpty(Ring) &&
+    while (!GcomRingIsEmpty(Ring) &&
            NT_SUCCESS(WdfIoQueueRetrieveNextRequest(ReadQueue, &readReq)))
     {
         PVOID readBuf;
@@ -374,7 +374,7 @@ VcomDrainRingToReads(
             continue;
         }
 
-        ULONG bytesRead = VcomRingRead(Ring, (PUCHAR)readBuf, (ULONG)readBufLen);
+        ULONG bytesRead = GcomRingRead(Ring, (PUCHAR)readBuf, (ULONG)readBufLen);
         if (bytesRead > 0) {
             WdfRequestCompleteWithInformation(readReq, STATUS_SUCCESS, bytesRead);
         } else {
@@ -389,15 +389,15 @@ VcomDrainRingToReads(
 /* ── Drain pending write IRPs into ring buffer ────────────────── */
 
 VOID
-VcomDrainWritesToRing(
-    _In_ PVCOM_RING_BUFFER Ring,
+GcomDrainWritesToRing(
+    _In_ PGCOM_RING_BUFFER Ring,
     _In_ WDFQUEUE WriteQueue,
     _In_ WDFQUEUE PeerReadQueue
 )
 {
     WDFREQUEST writeReq;
 
-    while (VcomRingWriteAvailable(Ring) > 0 &&
+    while (GcomRingWriteAvailable(Ring) > 0 &&
            NT_SUCCESS(WdfIoQueueRetrieveNextRequest(WriteQueue, &writeReq)))
     {
         PVOID writeBuf;
@@ -410,7 +410,7 @@ VcomDrainWritesToRing(
             continue;
         }
 
-        ULONG bytesWritten = VcomRingWrite(Ring, (const PUCHAR)writeBuf,
+        ULONG bytesWritten = GcomRingWrite(Ring, (const PUCHAR)writeBuf,
                                            (ULONG)writeBufLen);
         if (bytesWritten > 0) {
             WdfRequestCompleteWithInformation(writeReq, STATUS_SUCCESS,
@@ -418,7 +418,7 @@ VcomDrainWritesToRing(
 
             /* Try to satisfy pending reads on the peer side. */
             if (PeerReadQueue) {
-                VcomDrainRingToReads(Ring, PeerReadQueue);
+                GcomDrainRingToReads(Ring, PeerReadQueue);
             }
         } else {
             /* Ring still full — re-queue. */
@@ -432,8 +432,8 @@ VcomDrainWritesToRing(
 /* ── Check WaitCommEvent mask ─────────────────────────────────── */
 
 VOID
-VcomCheckWaitMask(
-    _In_ PVCOM_PORT_PAIR PortPair,
+GcomCheckWaitMask(
+    _In_ PGCOM_PORT_PAIR PortPair,
     _In_ ULONG Events
 )
 {

@@ -21,13 +21,13 @@
 
 #include <ntddk.h>
 
-typedef struct _VCOM_RING_BUFFER {
+typedef struct _GCOM_RING_BUFFER {
     PUCHAR          Buffer;
     ULONG           Size;           /* Must be power of 2 */
     ULONG           Mask;           /* Size - 1 */
     volatile LONG   WritePos;       /* Next write position */
     volatile LONG   ReadPos;        /* Next read position */
-} VCOM_RING_BUFFER, *PVCOM_RING_BUFFER;
+} GCOM_RING_BUFFER, *PGCOM_RING_BUFFER;
 
 
 /* ── Lifecycle ────────────────────────────────────────────────── */
@@ -39,8 +39,8 @@ typedef struct _VCOM_RING_BUFFER {
  * STATUS_INSUFFICIENT_RESOURCES.
  */
 static inline NTSTATUS
-VcomRingInit(
-    _Out_ PVCOM_RING_BUFFER Ring,
+GcomRingInit(
+    _Out_ PGCOM_RING_BUFFER Ring,
     _In_  ULONG Size
 )
 {
@@ -50,7 +50,7 @@ VcomRingInit(
     Ring->Buffer = (PUCHAR)ExAllocatePool2(
         POOL_FLAG_NON_PAGED,
         Size,
-        'mocV'
+        'mocG'
     );
     if (!Ring->Buffer) {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -68,12 +68,12 @@ VcomRingInit(
  * Free the ring buffer's memory.
  */
 static inline VOID
-VcomRingFree(
-    _Inout_ PVCOM_RING_BUFFER Ring
+GcomRingFree(
+    _Inout_ PGCOM_RING_BUFFER Ring
 )
 {
     if (Ring->Buffer) {
-        ExFreePoolWithTag(Ring->Buffer, 'mocV');
+        ExFreePoolWithTag(Ring->Buffer, 'mocG');
         Ring->Buffer = NULL;
     }
     Ring->Size = 0;
@@ -88,8 +88,8 @@ VcomRingFree(
  * Number of bytes available to read.
  */
 static inline ULONG
-VcomRingReadAvailable(
-    _In_ PVCOM_RING_BUFFER Ring
+GcomRingReadAvailable(
+    _In_ PGCOM_RING_BUFFER Ring
 )
 {
     LONG wp = InterlockedCompareExchange(&Ring->WritePos, 0, 0);
@@ -101,23 +101,23 @@ VcomRingReadAvailable(
  * Number of bytes of free space for writing.
  */
 static inline ULONG
-VcomRingWriteAvailable(
-    _In_ PVCOM_RING_BUFFER Ring
+GcomRingWriteAvailable(
+    _In_ PGCOM_RING_BUFFER Ring
 )
 {
     /* Leave one byte unused to distinguish full from empty. */
-    return Ring->Size - 1 - VcomRingReadAvailable(Ring);
+    return Ring->Size - 1 - GcomRingReadAvailable(Ring);
 }
 
 /*
  * Is the ring buffer empty?
  */
 static inline BOOLEAN
-VcomRingIsEmpty(
-    _In_ PVCOM_RING_BUFFER Ring
+GcomRingIsEmpty(
+    _In_ PGCOM_RING_BUFFER Ring
 )
 {
-    return VcomRingReadAvailable(Ring) == 0;
+    return GcomRingReadAvailable(Ring) == 0;
 }
 
 /* ── Operations ───────────────────────────────────────────────── */
@@ -129,13 +129,13 @@ VcomRingIsEmpty(
  * Length if the buffer is full).
  */
 static inline ULONG
-VcomRingWrite(
-    _In_ PVCOM_RING_BUFFER Ring,
+GcomRingWrite(
+    _In_ PGCOM_RING_BUFFER Ring,
     _In_reads_bytes_(Length) const UCHAR* Data,
     _In_ ULONG Length
 )
 {
-    ULONG available = VcomRingWriteAvailable(Ring);
+    ULONG available = GcomRingWriteAvailable(Ring);
     ULONG toWrite = min(Length, available);
     ULONG wp = (ULONG)Ring->WritePos & Ring->Mask;
 
@@ -165,13 +165,13 @@ VcomRingWrite(
  * Length if less data is available).
  */
 static inline ULONG
-VcomRingRead(
-    _In_  PVCOM_RING_BUFFER Ring,
+GcomRingRead(
+    _In_  PGCOM_RING_BUFFER Ring,
     _Out_writes_bytes_(Length) UCHAR* Data,
     _In_  ULONG Length
 )
 {
-    ULONG available = VcomRingReadAvailable(Ring);
+    ULONG available = GcomRingReadAvailable(Ring);
     ULONG toRead = min(Length, available);
     ULONG rp = (ULONG)Ring->ReadPos & Ring->Mask;
 
@@ -198,8 +198,8 @@ VcomRingRead(
  * Discard all data in the ring buffer (used for PURGE).
  */
 static inline VOID
-VcomRingFlush(
-    _In_ PVCOM_RING_BUFFER Ring
+GcomRingFlush(
+    _In_ PGCOM_RING_BUFFER Ring
 )
 {
     LONG wp = InterlockedCompareExchange(&Ring->WritePos, 0, 0);

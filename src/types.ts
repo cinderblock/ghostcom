@@ -22,7 +22,7 @@ export interface PortInfo {
   /** Whether an external application currently has the COM port open. */
   comSideOpen: boolean;
 
-  /** Whether the companion (node-null) side is currently connected. */
+  /** Whether the companion (GhostCOM) side is currently connected. */
   companionSideOpen: boolean;
 }
 

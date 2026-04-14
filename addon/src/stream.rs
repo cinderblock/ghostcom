@@ -78,7 +78,7 @@ impl PortStreamNative {
         let tsfn_clone = tsfn.clone();
 
         let read_thread = thread::Builder::new()
-            .name("vcom-reader".into())
+            .name("gcom-reader".into())
             .spawn(move || {
                 Self::read_thread_main(handle, tsfn_clone, shutdown, paused);
             })
@@ -119,7 +119,7 @@ impl PortStreamNative {
         // Perform the write on a worker thread to avoid blocking the
         // JS event loop.
         thread::Builder::new()
-            .name("vcom-writer".into())
+            .name("gcom-writer".into())
             .spawn(move || {
                 let result = Self::do_write(handle, &data);
                 match result {
@@ -188,7 +188,7 @@ impl PortStreamNative {
         let mut overlapped = match OverlappedEvent::new() {
             Ok(o) => o,
             Err(e) => {
-                eprintln!("node-null: read thread failed to create overlapped event: {e}");
+                eprintln!("ghostcom: read thread failed to create overlapped event: {e}");
                 return;
             }
         };
@@ -210,7 +210,7 @@ impl PortStreamNative {
 
             // Reset the overlapped event.
             if let Err(e) = overlapped.reset() {
-                eprintln!("node-null: read thread reset error: {e}");
+                eprintln!("ghostcom: read thread reset error: {e}");
                 break;
             }
 
@@ -258,7 +258,7 @@ impl PortStreamNative {
                     if e.code() == ERROR_OPERATION_ABORTED.into() {
                         break;
                     }
-                    eprintln!("node-null: read error: {e}");
+                    eprintln!("ghostcom: read error: {e}");
                     break;
                 }
             }

@@ -1,8 +1,8 @@
 /*
- * driver.h — Master header for the node-null virtual COM port driver.
+ * driver.h — Master header for the GhostCOM virtual COM port driver.
  *
  * KMDF virtual serial port driver that creates COM port / companion
- * device pairs. External applications open the COM port; the node-null
+ * device pairs. External applications open the COM port; the GhostCOM
  * native addon opens the companion device. Data and signals flow
  * between them through the driver.
  */
@@ -32,27 +32,27 @@
 
 /* ── Pool tag ─────────────────────────────────────────────────── */
 
-#define VCOM_POOL_TAG  'mocV'   /* 'Vcom' reversed for little-endian */
+#define GCOM_POOL_TAG  'mocG'   /* 'Gcom' reversed for little-endian */
 
 /* ── Limits ───────────────────────────────────────────────────── */
 
-#define VCOM_MAX_PORTS              64
-#define VCOM_RING_BUFFER_SIZE       (64 * 1024)  /* 64 KB per direction */
+#define GCOM_MAX_PORTS              64
+#define GCOM_RING_BUFFER_SIZE       (64 * 1024)  /* 64 KB per direction */
 
 /* ── Version ──────────────────────────────────────────────────── */
 
-#define VCOM_VERSION_MAJOR  0
-#define VCOM_VERSION_MINOR  1
-#define VCOM_VERSION_PATCH  0
+#define GCOM_VERSION_MAJOR  0
+#define GCOM_VERSION_MINOR  1
+#define GCOM_VERSION_PATCH  0
 
 /* ── Forward declarations ─────────────────────────────────────── */
 
-typedef struct _VCOM_PORT_PAIR   VCOM_PORT_PAIR,   *PVCOM_PORT_PAIR;
-typedef struct _VCOM_DEVICE_CTX  VCOM_DEVICE_CTX,  *PVCOM_DEVICE_CTX;
+typedef struct _GCOM_PORT_PAIR   GCOM_PORT_PAIR,   *PGCOM_PORT_PAIR;
+typedef struct _GCOM_DEVICE_CTX  GCOM_DEVICE_CTX,  *PGCOM_DEVICE_CTX;
 
 /* ── Port pair — one COM device + one companion device ────────── */
 
-typedef struct _VCOM_PORT_PAIR {
+typedef struct _GCOM_PORT_PAIR {
     /* Identification */
     ULONG               PortNumber;       /* COM port number (e.g., 10) */
     ULONG               CompanionIndex;   /* Companion device index */
@@ -64,15 +64,15 @@ typedef struct _VCOM_PORT_PAIR {
 
     /* Symbolic link names */
     UNICODE_STRING       ComSymLink;       /* \\DosDevices\\COM<N> */
-    UNICODE_STRING       CompSymLink;      /* \\DosDevices\\VCOMCompanion<N> */
+    UNICODE_STRING       CompSymLink;      /* \\DosDevices\\GCOM<N> */
 
     /* Open state */
     volatile LONG        ComSideOpen;
     volatile LONG        CompanionSideOpen;
 
     /* Ring buffers */
-    VCOM_RING_BUFFER     ComToCompanion;   /* COM writes → companion reads */
-    VCOM_RING_BUFFER     CompanionToCom;   /* Companion writes → COM reads */
+    GCOM_RING_BUFFER     ComToCompanion;   /* COM writes → companion reads */
+    GCOM_RING_BUFFER     CompanionToCom;   /* Companion writes → COM reads */
 
     /* Pending I/O queues */
     WDFQUEUE             ComReadQueue;     /* Pending COM-side reads */
@@ -81,7 +81,7 @@ typedef struct _VCOM_PORT_PAIR {
     WDFQUEUE             CompWriteQueue;   /* Pending companion writes (when ring full) */
 
     /* Signal state (COM side configuration) */
-    VCOM_SIGNAL_STATE    SignalState;
+    GCOM_SIGNAL_STATE    SignalState;
     WDFSPINLOCK          SignalLock;
 
     /* Companion-side output signals (null-modem crossover) */
@@ -103,14 +103,14 @@ typedef struct _VCOM_PORT_PAIR {
     /* Reference count for safe teardown */
     volatile LONG        RefCount;
 
-} VCOM_PORT_PAIR, *PVCOM_PORT_PAIR;
+} GCOM_PORT_PAIR, *PGCOM_PORT_PAIR;
 
 
 /* ── Driver device context (FDO) ──────────────────────────────── */
 
-typedef struct _VCOM_DEVICE_CTX {
+typedef struct _GCOM_DEVICE_CTX {
     /* Port pair table */
-    PVCOM_PORT_PAIR      Ports[VCOM_MAX_PORTS];
+    PGCOM_PORT_PAIR      Ports[GCOM_MAX_PORTS];
     ULONG                PortCount;
     WDFSPINLOCK          PortTableLock;
 
@@ -120,144 +120,144 @@ typedef struct _VCOM_DEVICE_CTX {
     /* Next companion index (monotonically increasing) */
     volatile LONG        NextCompanionIndex;
 
-} VCOM_DEVICE_CTX, *PVCOM_DEVICE_CTX;
+} GCOM_DEVICE_CTX, *PGCOM_DEVICE_CTX;
 
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(VCOM_DEVICE_CTX, VcomGetDeviceContext)
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(GCOM_DEVICE_CTX, GcomGetDeviceContext)
 
 
 /* ── Per-device context for COM / companion devices ──────────── */
 
-typedef struct _VCOM_PORT_DEVICE_CTX {
-    PVCOM_PORT_PAIR  PortPair;
+typedef struct _GCOM_PORT_DEVICE_CTX {
+    PGCOM_PORT_PAIR  PortPair;
     BOOLEAN          IsComSide;     /* TRUE = COM, FALSE = companion */
-} VCOM_PORT_DEVICE_CTX, *PVCOM_PORT_DEVICE_CTX;
+} GCOM_PORT_DEVICE_CTX, *PGCOM_PORT_DEVICE_CTX;
 
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(VCOM_PORT_DEVICE_CTX, VcomGetPortDeviceContext)
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(GCOM_PORT_DEVICE_CTX, GcomGetPortDeviceContext)
 
 
 /* ── Per-file-object context (to identify COM vs companion) ──── */
 
-typedef enum _VCOM_FILE_TYPE {
-    VcomFileTypeControl,
-    VcomFileTypeCom,
-    VcomFileTypeCompanion,
-} VCOM_FILE_TYPE;
+typedef enum _GCOM_FILE_TYPE {
+    GcomFileTypeControl,
+    GcomFileTypeCom,
+    GcomFileTypeCompanion,
+} GCOM_FILE_TYPE;
 
-typedef struct _VCOM_FILE_CTX {
-    VCOM_FILE_TYPE  FileType;
-    PVCOM_PORT_PAIR PortPair;       /* NULL for control device files */
-} VCOM_FILE_CTX, *PVCOM_FILE_CTX;
+typedef struct _GCOM_FILE_CTX {
+    GCOM_FILE_TYPE  FileType;
+    PGCOM_PORT_PAIR PortPair;       /* NULL for control device files */
+} GCOM_FILE_CTX, *PGCOM_FILE_CTX;
 
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(VCOM_FILE_CTX, VcomGetFileContext)
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(GCOM_FILE_CTX, GcomGetFileContext)
 
 
 /* ── Function prototypes: driver.c ────────────────────────────── */
 
 DRIVER_INITIALIZE DriverEntry;
-EVT_WDF_DRIVER_DEVICE_ADD             VcomEvtDeviceAdd;
-EVT_WDF_DEVICE_D0_ENTRY               VcomEvtDeviceD0Entry;
-EVT_WDF_DEVICE_D0_EXIT                VcomEvtDeviceD0Exit;
-EVT_WDF_DEVICE_SELF_MANAGED_IO_CLEANUP VcomEvtSelfManagedIoCleanup;
+EVT_WDF_DRIVER_DEVICE_ADD             GcomEvtDeviceAdd;
+EVT_WDF_DEVICE_D0_ENTRY               GcomEvtDeviceD0Entry;
+EVT_WDF_DEVICE_D0_EXIT                GcomEvtDeviceD0Exit;
+EVT_WDF_DEVICE_SELF_MANAGED_IO_CLEANUP GcomEvtSelfManagedIoCleanup;
 
 /* ── Function prototypes: control.c ───────────────────────────── */
 
-NTSTATUS VcomControlDeviceCreate(
+NTSTATUS GcomControlDeviceCreate(
     _In_ WDFDEVICE ParentDevice,
-    _In_ PVCOM_DEVICE_CTX DevCtx
+    _In_ PGCOM_DEVICE_CTX DevCtx
 );
 
-EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL VcomControlIoDeviceControl;
+EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL GcomControlIoDeviceControl;
 
 /* ── Function prototypes: comport.c ───────────────────────────── */
 
 /*
  * Create the COM port control device with I/O queues.
  *
- * This creates a WDFDEVICE named \Device\VCOMSerial<N> with a
+ * This creates a WDFDEVICE named \Device\GCOMSerial<N> with a
  * symbolic link \DosDevices\COM<N>, default I/O queue dispatching
  * reads/writes/IOCTLs, and manual queues for pending I/O.
  */
-NTSTATUS VcomComPortCreate(
+NTSTATUS GcomComPortCreate(
     _In_ WDFDRIVER Driver,
-    _In_ PVCOM_DEVICE_CTX DevCtx,
-    _In_ PVCOM_PORT_PAIR PortPair,
+    _In_ PGCOM_DEVICE_CTX DevCtx,
+    _In_ PGCOM_PORT_PAIR PortPair,
     _In_ ULONG PortNumber
 );
 
-VOID VcomComPortDestroy(
-    _In_ PVCOM_PORT_PAIR PortPair
+VOID GcomComPortDestroy(
+    _In_ PGCOM_PORT_PAIR PortPair
 );
 
-EVT_WDF_IO_QUEUE_IO_READ           VcomComEvtRead;
-EVT_WDF_IO_QUEUE_IO_WRITE          VcomComEvtWrite;
-EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL VcomComEvtIoctl;
-EVT_WDF_DEVICE_FILE_CREATE          VcomComEvtFileCreate;
-EVT_WDF_FILE_CLOSE                  VcomComEvtFileClose;
+EVT_WDF_IO_QUEUE_IO_READ           GcomComEvtRead;
+EVT_WDF_IO_QUEUE_IO_WRITE          GcomComEvtWrite;
+EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL GcomComEvtIoctl;
+EVT_WDF_DEVICE_FILE_CREATE          GcomComEvtFileCreate;
+EVT_WDF_FILE_CLOSE                  GcomComEvtFileClose;
 
 /* ── Function prototypes: companion.c ─────────────────────────── */
 
 /*
  * Create the companion control device with I/O queues.
  *
- * This creates a WDFDEVICE named \Device\VCOMCompanion<N> with a
- * symbolic link \DosDevices\VCOMCompanion<N>.
+ * This creates a WDFDEVICE named \Device\GCOM<N> with a
+ * symbolic link \DosDevices\GCOM<N>.
  */
-NTSTATUS VcomCompanionCreate(
+NTSTATUS GcomCompanionCreate(
     _In_ WDFDRIVER Driver,
-    _In_ PVCOM_DEVICE_CTX DevCtx,
-    _In_ PVCOM_PORT_PAIR PortPair
+    _In_ PGCOM_DEVICE_CTX DevCtx,
+    _In_ PGCOM_PORT_PAIR PortPair
 );
 
-VOID VcomCompanionDestroy(
-    _In_ PVCOM_PORT_PAIR PortPair
+VOID GcomCompanionDestroy(
+    _In_ PGCOM_PORT_PAIR PortPair
 );
 
-EVT_WDF_IO_QUEUE_IO_READ           VcomCompEvtRead;
-EVT_WDF_IO_QUEUE_IO_WRITE          VcomCompEvtWrite;
-EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL VcomCompEvtIoctl;
-EVT_WDF_DEVICE_FILE_CREATE          VcomCompEvtFileCreate;
-EVT_WDF_FILE_CLOSE                  VcomCompEvtFileClose;
+EVT_WDF_IO_QUEUE_IO_READ           GcomCompEvtRead;
+EVT_WDF_IO_QUEUE_IO_WRITE          GcomCompEvtWrite;
+EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL GcomCompEvtIoctl;
+EVT_WDF_DEVICE_FILE_CREATE          GcomCompEvtFileCreate;
+EVT_WDF_FILE_CLOSE                  GcomCompEvtFileClose;
 
 /* ── Function prototypes: portpair.c ──────────────────────────── */
 
-NTSTATUS VcomPortPairCreate(
+NTSTATUS GcomPortPairCreate(
     _In_  WDFDRIVER Driver,
-    _In_  PVCOM_DEVICE_CTX DevCtx,
+    _In_  PGCOM_DEVICE_CTX DevCtx,
     _In_  ULONG RequestedPortNumber,
-    _Out_ PVCOM_PORT_PAIR* OutPortPair
+    _Out_ PGCOM_PORT_PAIR* OutPortPair
 );
 
-VOID VcomPortPairDestroy(
-    _In_ PVCOM_DEVICE_CTX DevCtx,
-    _In_ PVCOM_PORT_PAIR PortPair
+VOID GcomPortPairDestroy(
+    _In_ PGCOM_DEVICE_CTX DevCtx,
+    _In_ PGCOM_PORT_PAIR PortPair
 );
 
 /* Find an unused COM port number. */
-ULONG VcomFindFreePortNumber(
-    _In_ PVCOM_DEVICE_CTX DevCtx
+ULONG GcomFindFreePortNumber(
+    _In_ PGCOM_DEVICE_CTX DevCtx
 );
 
 /* Notify companion-side signal waiters of a change. */
-VOID VcomSignalChanged(
-    _In_ PVCOM_PORT_PAIR PortPair,
+VOID GcomSignalChanged(
+    _In_ PGCOM_PORT_PAIR PortPair,
     _In_ ULONG ChangedBits
 );
 
 /* Satisfy pending reads from the ring buffer. */
-VOID VcomDrainRingToReads(
-    _In_ PVCOM_RING_BUFFER Ring,
+VOID GcomDrainRingToReads(
+    _In_ PGCOM_RING_BUFFER Ring,
     _In_ WDFQUEUE ReadQueue
 );
 
 /* Satisfy pending writes into the ring buffer. */
-VOID VcomDrainWritesToRing(
-    _In_ PVCOM_RING_BUFFER Ring,
+VOID GcomDrainWritesToRing(
+    _In_ PGCOM_RING_BUFFER Ring,
     _In_ WDFQUEUE WriteQueue,
     _In_ WDFQUEUE PeerReadQueue
 );
 
 /* Complete pending WaitCommEvent IRPs if appropriate. */
-VOID VcomCheckWaitMask(
-    _In_ PVCOM_PORT_PAIR PortPair,
+VOID GcomCheckWaitMask(
+    _In_ PGCOM_PORT_PAIR PortPair,
     _In_ ULONG Events
 );

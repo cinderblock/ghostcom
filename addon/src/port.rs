@@ -36,7 +36,7 @@ pub struct NativePort {
 /// pair in the driver.
 #[napi]
 pub fn open_port(companion_index: u32) -> Result<NativePort> {
-    let path = format!("\\\\.\\VCOMCompanion{}", companion_index);
+    let path = format!("\\\\.\\GCOM{}", companion_index);
 
     // Open two handles: one for overlapped data I/O, one for sync control.
     let data_handle = open_device_overlapped(&path)
@@ -94,16 +94,16 @@ impl NativePort {
     /// Get the current signal state (synchronous).
     #[napi]
     pub fn get_signals(&self) -> Result<RawSignalStateJs> {
-        let mut state = VcomSignalState::default();
+        let mut state = GcomSignalState::default();
 
         unsafe {
             device_ioctl(
                 self.control_handle,
-                IOCTL_VCOM_GET_SIGNALS,
+                IOCTL_GCOM_GET_SIGNALS,
                 std::ptr::null(),
                 0,
                 &mut state as *mut _ as *mut u8,
-                mem::size_of::<VcomSignalState>() as u32,
+                mem::size_of::<GcomSignalState>() as u32,
             )?;
         }
 
@@ -117,7 +117,7 @@ impl NativePort {
     /// - RTS → COM side sees CTS
     #[napi]
     pub fn set_signals(&self, dtr: bool, rts: bool) -> Result<()> {
-        let signals = VcomSetSignals {
+        let signals = GcomSetSignals {
             dtr_state: if dtr { 1 } else { 0 },
             rts_state: if rts { 1 } else { 0 },
         };
@@ -125,9 +125,9 @@ impl NativePort {
         unsafe {
             device_ioctl(
                 self.control_handle,
-                IOCTL_VCOM_SET_SIGNALS,
+                IOCTL_GCOM_SET_SIGNALS,
                 &signals as *const _ as *const u8,
-                mem::size_of::<VcomSetSignals>() as u32,
+                mem::size_of::<GcomSetSignals>() as u32,
                 std::ptr::null_mut(),
                 0,
             )?;

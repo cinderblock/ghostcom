@@ -43,6 +43,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ghostcom-addon"
+version = "0.1.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "windows",
+]
+
+[[package]]
 name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -113,16 +123,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "427802e8ec3a734331fec1035594a210ce1ff4dc5bc1950530920ab717964ea3"
 dependencies = [
  "libloading",
-]
-
-[[package]]
-name = "node-null-addon"
-version = "0.1.0"
-dependencies = [
- "napi",
- "napi-build",
- "napi-derive",
- "windows",
 ]
 
 [[package]]

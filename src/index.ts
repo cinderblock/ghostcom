@@ -1,5 +1,5 @@
 /**
- * # node-null
+ * # GhostCOM
  *
  * Virtual COM port creation for Node.js and Bun on Windows.
  *
@@ -12,7 +12,7 @@
  * ## Quick Start
  *
  * ```ts
- * import { createPort, SignalChanged } from "node-null";
+ * import { createPort, SignalChanged } from "ghostcom";
  *
  * const port = await createPort({ portNumber: 10 });
  *

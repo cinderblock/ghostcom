@@ -1,4 +1,4 @@
-# node-null
+# GhostCOM
 
 Virtual COM port creation for Node.js and Bun on Windows.
 
@@ -33,7 +33,7 @@ Create fake serial ports that appear as real COM ports to the operating system. 
                ▼                          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  KMDF Kernel Driver                                         │
-│  \\.\VCOMCompanion<N>  ←──ring buffers──→  \\.\COM<N>       │
+│  \\.\GCOM<N>           ←──ring buffers──→  \\.\COM<N>       │
 │  (companion device)     (signal state)     (serial port)    │
 └──────────────────────────────────────────┬──────────────────┘
                                            │
@@ -45,7 +45,7 @@ Create fake serial ports that appear as real COM ports to the operating system. 
 ## Quick Start
 
 ```ts
-import { createPort, SignalChanged } from "node-null";
+import { createPort, SignalChanged } from "ghostcom";
 
 // Create a virtual COM port
 const port = await createPort({ portNumber: 10 });
@@ -78,7 +78,7 @@ await port.destroy();
 
 ### Driver Installation
 
-node-null requires a kernel-mode driver to create real COM port devices. The driver must be built with the Windows Driver Kit and installed with administrator privileges.
+GhostCOM requires a kernel-mode driver to create real COM port devices. The driver must be built with the Windows Driver Kit and installed with administrator privileges.
 
 **Requirements:**
 
@@ -222,9 +222,9 @@ The reverse direction (your code → external app) follows the symmetric path th
 
 1. External app calls `SetCommState` (or similar) to set baud rate to 115200
 2. Windows sends `IOCTL_SERIAL_SET_BAUD_RATE` to the COM device
-3. The driver updates `SignalState.BaudRate`, increments the sequence number, sets `ChangedMask |= VCOM_CHANGED_BAUD`
-4. The driver completes any pending `IOCTL_VCOM_WAIT_SIGNAL_CHANGE` on the companion device
-5. The addon's signal-watcher thread receives the `VcomSignalState` struct
+3. The driver updates `SignalState.BaudRate`, increments the sequence number, sets `ChangedMask |= GCOM_CHANGED_BAUD`
+4. The driver completes any pending `IOCTL_GCOM_WAIT_SIGNAL_CHANGE` on the companion device
+5. The addon's signal-watcher thread receives the `GcomSignalState` struct
 6. It invokes a `ThreadsafeFunction` to deliver the decoded `SignalState` to JS
 7. `VirtualPort` emits `"signal"` with the full state snapshot
 

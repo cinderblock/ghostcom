@@ -1,7 +1,7 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Install the node-null virtual COM port kernel driver.
+    Install the GhostCOM virtual COM port kernel driver.
 
 .DESCRIPTION
     Copies the driver package to a staging directory and installs it
@@ -11,7 +11,7 @@
     Enable Windows test signing mode (requires reboot).
 
 .PARAMETER DriverPath
-    Path to the directory containing node-null.sys and node-null.inf.
+    Path to the directory containing ghostcom.sys and ghostcom.inf.
     Defaults to ../driver/build/x64/Release.
 #>
 
@@ -22,14 +22,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "node-null driver installer" -ForegroundColor Cyan
+Write-Host "GhostCOM driver installer" -ForegroundColor Cyan
 Write-Host "=========================" -ForegroundColor Cyan
 Write-Host ""
 
 # ── Verify driver files exist ──────────────────────────────────
 
-$sysFile = Join-Path $DriverPath "node-null.sys"
-$infFile = Join-Path $DriverPath "node-null.inf"
+$sysFile = Join-Path $DriverPath "ghostcom.sys"
+$infFile = Join-Path $DriverPath "ghostcom.inf"
 
 if (-not (Test-Path $sysFile)) {
     Write-Error "Driver binary not found at: $sysFile`nBuild the driver first with: bun run build:driver"
@@ -63,7 +63,7 @@ if ($LASTEXITCODE -ne 0) {
     # Fall back to devcon if available.
     $devcon = Get-Command devcon.exe -ErrorAction SilentlyContinue
     if ($devcon) {
-        & devcon.exe install $infFile "Root\NodeNull"
+        & devcon.exe install $infFile "Root\GhostCOM"
         if ($LASTEXITCODE -ne 0) {
             Write-Error "devcon install failed. Check the output above."
             exit 1
@@ -83,7 +83,7 @@ To enable test signing:
     (reboot)
 
 To install with devcon:
-    devcon install node-null.inf Root\NodeNull
+    devcon install ghostcom.inf Root\GhostCOM
 "@
         exit 1
     }
@@ -95,5 +95,5 @@ Write-Host ""
 Write-Host "Driver installed successfully!" -ForegroundColor Green
 Write-Host ""
 Write-Host "Verify with:" -ForegroundColor Cyan
-Write-Host "  pnputil /enum-drivers | Select-String -Context 3 'NodeNull'"
-Write-Host "  sc query NodeNull"
+Write-Host "  pnputil /enum-drivers | Select-String -Context 3 'GhostCOM'"
+Write-Host "  sc query GhostCOM"

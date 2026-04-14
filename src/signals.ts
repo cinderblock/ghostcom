@@ -2,7 +2,7 @@ import type { Parity, SignalState, StopBits } from "./types.js";
 
 /**
  * Raw signal state as returned by the native addon.
- * Field names match the C `VCOM_SIGNAL_STATE` structure layout.
+ * Field names match the C `GCOM_SIGNAL_STATE` structure layout.
  */
 export interface RawSignalState {
   sequenceNumber: number;

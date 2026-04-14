@@ -5,27 +5,27 @@ const require = createRequire(import.meta.url);
 
 /**
  * The native control binding exposed by the Rust addon.
- * These map to IOCTLs on the \\.\VCOMControl device.
+ * These map to IOCTLs on the \\.\GCOMControl device.
  */
 export interface NativeControlBinding {
   /**
-   * Send IOCTL_VCOM_CREATE_PORT to the control device.
+   * Send IOCTL_GCOM_CREATE_PORT to the control device.
    * Returns the assigned port number and companion index.
    */
   createPort(portNumber: number): { portNumber: number; companionIndex: number };
 
   /**
-   * Send IOCTL_VCOM_DESTROY_PORT to the control device.
+   * Send IOCTL_GCOM_DESTROY_PORT to the control device.
    */
   destroyPort(companionIndex: number): void;
 
   /**
-   * Send IOCTL_VCOM_LIST_PORTS to the control device.
+   * Send IOCTL_GCOM_LIST_PORTS to the control device.
    */
   listPorts(): PortInfo[];
 
   /**
-   * Check whether the VCOMControl device can be opened.
+   * Check whether the GCOMControl device can be opened.
    */
   isDriverAvailable(): boolean;
 
@@ -51,14 +51,14 @@ function getBinding(): NativeControlBinding {
     // The @napi-rs/cli `artifacts` command places the correct
     // platform binary alongside the package.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const native = require("../addon/node-null.node");
+    const native = require("../addon/ghostcom.node");
     _binding = native as NativeControlBinding;
     return _binding;
   } catch (cause) {
     throw new Error(
-      "Failed to load the node-null native addon. " +
+      "Failed to load the GhostCOM native addon. " +
         "Ensure the addon is built (`bun run build:addon`) and " +
-        "the vcom driver is installed (`bun run install:driver`).",
+        "the gcom driver is installed (`bun run install:driver`).",
       { cause },
     );
   }
@@ -89,7 +89,7 @@ export function nativeListPorts(): PortInfo[] {
 }
 
 /**
- * Check if the vcom kernel driver is installed and accessible.
+ * Check if the gcom kernel driver is installed and accessible.
  */
 export function nativeIsDriverAvailable(): boolean {
   try {

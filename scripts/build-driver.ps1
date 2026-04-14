@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Build the node-null kernel driver.
+    Build the GhostCOM kernel driver.
 
 .DESCRIPTION
     Invokes MSBuild with WDK targets to build the driver.
@@ -28,14 +28,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "node-null driver build" -ForegroundColor Cyan
-Write-Host "======================" -ForegroundColor Cyan
+Write-Host "GhostCOM driver build" -ForegroundColor Cyan
+Write-Host "=====================" -ForegroundColor Cyan
 Write-Host "Configuration: $Configuration"
 Write-Host "Platform:      $Platform"
 Write-Host ""
 
 $driverDir = Join-Path $PSScriptRoot "..\driver"
-$projectFile = Join-Path $driverDir "node-null.vcxproj"
+$projectFile = Join-Path $driverDir "ghostcom.vcxproj"
 
 # ── Check prerequisites ───────────────────────────────────────
 
@@ -81,7 +81,7 @@ if (-not (Test-Path $projectFile)) {
     Write-Host "1. Open Visual Studio"
     Write-Host "2. Create new project → 'Kernel Mode Driver, Empty (KMDF)'"
     Write-Host "3. Add existing source files from driver/src/"
-    Write-Host "4. Save the project as driver/node-null.vcxproj"
+    Write-Host "4. Save the project as driver/ghostcom.vcxproj"
     Write-Host ""
     Write-Host "Or use the EWDK (Enterprise WDK) standalone build environment."
     exit 1
@@ -110,7 +110,7 @@ Write-Host "Build succeeded! Output: $buildDir" -ForegroundColor Green
 
 # ── Copy INF ───────────────────────────────────────────────────
 
-$infSrc = Join-Path $driverDir "node-null.inf"
+$infSrc = Join-Path $driverDir "ghostcom.inf"
 if (Test-Path $infSrc) {
     Copy-Item $infSrc $buildDir -Force
     Write-Host "Copied INF file to output directory."
@@ -122,8 +122,8 @@ if ($Sign) {
     Write-Host ""
     Write-Host "Self-signing driver for test mode..." -ForegroundColor Yellow
 
-    $certName = "NodeNullTestCert"
-    $sysPath = Join-Path $buildDir "node-null.sys"
+    $certName = "GhostCOMTestCert"
+    $sysPath = Join-Path $buildDir "ghostcom.sys"
 
     # Create a self-signed certificate if one doesn't exist.
     $cert = Get-ChildItem Cert:\CurrentUser\My |
@@ -170,7 +170,7 @@ if ($Sign) {
                    Select-Object -First 1 -ExpandProperty FullName
         if ($inf2cat) {
             & $inf2cat /driver:$buildDir /os:10_x64
-            $catPath = Join-Path $buildDir "node-null.cat"
+            $catPath = Join-Path $buildDir "ghostcom.cat"
             if (Test-Path $catPath) {
                 & $signtool sign /fd SHA256 /a /s My /n $certName $catPath
             }
@@ -183,4 +183,4 @@ if ($Sign) {
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
 Write-Host "  Install: bun run install:driver"
-Write-Host "  Test:    sc query NodeNull"
+Write-Host "  Test:    sc query GhostCOM"

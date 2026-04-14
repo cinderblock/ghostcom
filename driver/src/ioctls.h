@@ -14,25 +14,25 @@
 
 /* ── Device type ──────────────────────────────────────────────── */
 
-#define VCOM_DEVICE_TYPE  0x8001
+#define GCOM_DEVICE_TYPE  0x8001
 
 /* ── Control device IOCTLs ────────────────────────────────────── */
 
 /* Create a new virtual COM port pair (COM device + companion). */
-#define IOCTL_VCOM_CREATE_PORT \
-    CTL_CODE(VCOM_DEVICE_TYPE, 0x800, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_GCOM_CREATE_PORT \
+    CTL_CODE(GCOM_DEVICE_TYPE, 0x800, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 
 /* Destroy an existing virtual COM port pair. */
-#define IOCTL_VCOM_DESTROY_PORT \
-    CTL_CODE(VCOM_DEVICE_TYPE, 0x801, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_GCOM_DESTROY_PORT \
+    CTL_CODE(GCOM_DEVICE_TYPE, 0x801, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 
 /* List all active virtual COM port pairs. */
-#define IOCTL_VCOM_LIST_PORTS \
-    CTL_CODE(VCOM_DEVICE_TYPE, 0x802, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define IOCTL_GCOM_LIST_PORTS \
+    CTL_CODE(GCOM_DEVICE_TYPE, 0x802, METHOD_BUFFERED, FILE_READ_ACCESS)
 
 /* Query driver version. */
-#define IOCTL_VCOM_GET_VERSION \
-    CTL_CODE(VCOM_DEVICE_TYPE, 0x803, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define IOCTL_GCOM_GET_VERSION \
+    CTL_CODE(GCOM_DEVICE_TYPE, 0x803, METHOD_BUFFERED, FILE_READ_ACCESS)
 
 /* ── Companion device IOCTLs ──────────────────────────────────── */
 
@@ -41,70 +41,70 @@
  *
  * The driver holds this IRP until any serial configuration or
  * control signal changes on the COM side, then completes it with
- * a VCOM_SIGNAL_STATE payload.
+ * a GCOM_SIGNAL_STATE payload.
  *
  * The user-mode caller should immediately re-issue this IOCTL
  * after processing the result.
  */
-#define IOCTL_VCOM_WAIT_SIGNAL_CHANGE \
-    CTL_CODE(VCOM_DEVICE_TYPE, 0x810, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define IOCTL_GCOM_WAIT_SIGNAL_CHANGE \
+    CTL_CODE(GCOM_DEVICE_TYPE, 0x810, METHOD_BUFFERED, FILE_READ_ACCESS)
 
 /* Get current signal state snapshot (synchronous). */
-#define IOCTL_VCOM_GET_SIGNALS \
-    CTL_CODE(VCOM_DEVICE_TYPE, 0x811, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define IOCTL_GCOM_GET_SIGNALS \
+    CTL_CODE(GCOM_DEVICE_TYPE, 0x811, METHOD_BUFFERED, FILE_READ_ACCESS)
 
 /* Set companion-side output signals (DTR, RTS). */
-#define IOCTL_VCOM_SET_SIGNALS \
-    CTL_CODE(VCOM_DEVICE_TYPE, 0x812, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_GCOM_SET_SIGNALS \
+    CTL_CODE(GCOM_DEVICE_TYPE, 0x812, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 
 
 /* ── Data structures ──────────────────────────────────────────── */
 
 #pragma pack(push, 1)
 
-/* Request for IOCTL_VCOM_CREATE_PORT. */
-typedef struct _VCOM_CREATE_PORT_REQUEST {
+/* Request for IOCTL_GCOM_CREATE_PORT. */
+typedef struct _GCOM_CREATE_PORT_REQUEST {
     ULONG PortNumber;         /* 0 = auto-assign */
-} VCOM_CREATE_PORT_REQUEST, *PVCOM_CREATE_PORT_REQUEST;
+} GCOM_CREATE_PORT_REQUEST, *PGCOM_CREATE_PORT_REQUEST;
 
-/* Response for IOCTL_VCOM_CREATE_PORT. */
-typedef struct _VCOM_CREATE_PORT_RESPONSE {
+/* Response for IOCTL_GCOM_CREATE_PORT. */
+typedef struct _GCOM_CREATE_PORT_RESPONSE {
     ULONG PortNumber;         /* Assigned COM port number */
     ULONG CompanionIndex;     /* Companion device index */
-} VCOM_CREATE_PORT_RESPONSE, *PVCOM_CREATE_PORT_RESPONSE;
+} GCOM_CREATE_PORT_RESPONSE, *PGCOM_CREATE_PORT_RESPONSE;
 
-/* Request for IOCTL_VCOM_DESTROY_PORT. */
-typedef struct _VCOM_DESTROY_PORT_REQUEST {
+/* Request for IOCTL_GCOM_DESTROY_PORT. */
+typedef struct _GCOM_DESTROY_PORT_REQUEST {
     ULONG CompanionIndex;
-} VCOM_DESTROY_PORT_REQUEST, *PVCOM_DESTROY_PORT_REQUEST;
+} GCOM_DESTROY_PORT_REQUEST, *PGCOM_DESTROY_PORT_REQUEST;
 
 /* Per-port info in list response. */
-typedef struct _VCOM_PORT_INFO {
+typedef struct _GCOM_PORT_INFO {
     ULONG PortNumber;
     ULONG CompanionIndex;
     ULONG ComSideOpen;        /* BOOLEAN as ULONG */
     ULONG CompanionSideOpen;  /* BOOLEAN as ULONG */
-} VCOM_PORT_INFO, *PVCOM_PORT_INFO;
+} GCOM_PORT_INFO, *PGCOM_PORT_INFO;
 
-/* Header for IOCTL_VCOM_LIST_PORTS response. */
-typedef struct _VCOM_LIST_PORTS_HEADER {
+/* Header for IOCTL_GCOM_LIST_PORTS response. */
+typedef struct _GCOM_LIST_PORTS_HEADER {
     ULONG Count;
-} VCOM_LIST_PORTS_HEADER, *PVCOM_LIST_PORTS_HEADER;
+} GCOM_LIST_PORTS_HEADER, *PGCOM_LIST_PORTS_HEADER;
 
 /* Driver version info. */
-typedef struct _VCOM_VERSION_INFO {
+typedef struct _GCOM_VERSION_INFO {
     USHORT Major;
     USHORT Minor;
     USHORT Patch;
     USHORT Reserved;
-} VCOM_VERSION_INFO, *PVCOM_VERSION_INFO;
+} GCOM_VERSION_INFO, *PGCOM_VERSION_INFO;
 
 /*
  * Complete signal state snapshot.
  *
- * Returned by IOCTL_VCOM_GET_SIGNALS and IOCTL_VCOM_WAIT_SIGNAL_CHANGE.
+ * Returned by IOCTL_GCOM_GET_SIGNALS and IOCTL_GCOM_WAIT_SIGNAL_CHANGE.
  */
-typedef struct _VCOM_SIGNAL_STATE {
+typedef struct _GCOM_SIGNAL_STATE {
     ULONG SequenceNumber;     /* Monotonic counter */
     ULONG ChangedMask;        /* Bitmask of changes */
 
@@ -137,26 +137,26 @@ typedef struct _VCOM_SIGNAL_STATE {
 
     /* COM-side WaitCommEvent mask */
     ULONG WaitMask;
-} VCOM_SIGNAL_STATE, *PVCOM_SIGNAL_STATE;
+} GCOM_SIGNAL_STATE, *PGCOM_SIGNAL_STATE;
 
-/* Payload for IOCTL_VCOM_SET_SIGNALS. */
-typedef struct _VCOM_SET_SIGNALS {
+/* Payload for IOCTL_GCOM_SET_SIGNALS. */
+typedef struct _GCOM_SET_SIGNALS {
     ULONG DtrState;           /* BOOLEAN as ULONG */
     ULONG RtsState;           /* BOOLEAN as ULONG */
-} VCOM_SET_SIGNALS, *PVCOM_SET_SIGNALS;
+} GCOM_SET_SIGNALS, *PGCOM_SET_SIGNALS;
 
 #pragma pack(pop)
 
 
 /* ── ChangedMask bit definitions ──────────────────────────────── */
 
-#define VCOM_CHANGED_BAUD       0x0001
-#define VCOM_CHANGED_LINE_CTRL  0x0002
-#define VCOM_CHANGED_DTR        0x0004
-#define VCOM_CHANGED_RTS        0x0008
-#define VCOM_CHANGED_BREAK      0x0010
-#define VCOM_CHANGED_HANDFLOW   0x0020
-#define VCOM_CHANGED_CHARS      0x0040
-#define VCOM_CHANGED_WAIT_MASK  0x0080
-#define VCOM_CHANGED_COM_OPEN   0x0100
-#define VCOM_CHANGED_COM_CLOSE  0x0200
+#define GCOM_CHANGED_BAUD       0x0001
+#define GCOM_CHANGED_LINE_CTRL  0x0002
+#define GCOM_CHANGED_DTR        0x0004
+#define GCOM_CHANGED_RTS        0x0008
+#define GCOM_CHANGED_BREAK      0x0010
+#define GCOM_CHANGED_HANDFLOW   0x0020
+#define GCOM_CHANGED_CHARS      0x0040
+#define GCOM_CHANGED_WAIT_MASK  0x0080
+#define GCOM_CHANGED_COM_OPEN   0x0100
+#define GCOM_CHANGED_COM_CLOSE  0x0200

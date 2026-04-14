@@ -1,5 +1,5 @@
 {
-  "name": "node-null",
+  "name": "ghostcom",
   "version": "0.1.0",
   "description": "Virtual COM port creation for Node.js and Bun on Windows — high-performance native duplex streams with tappable serial control signals",
   "type": "module",
@@ -28,7 +28,7 @@
     "clean": "rimraf dist addon/target addon/*.node"
   },
   "napi": {
-    "binaryName": "node-null",
+    "binaryName": "ghostcom",
     "targets": [
       "x86_64-pc-windows-msvc",
       "aarch64-pc-windows-msvc"

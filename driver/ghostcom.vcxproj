@@ -3,8 +3,8 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
     <TemplateGuid>{1bc93793-694f-48fe-9372-81e2b05556fd}</TemplateGuid>
-    <RootNamespace>NodeNull</RootNamespace>
-    <ProjectName>node-null</ProjectName>
+    <RootNamespace>GhostCOM</RootNamespace>
+    <ProjectName>ghostcom</ProjectName>
     <MinimumVisualStudioVersion>12.0</MinimumVisualStudioVersion>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
@@ -18,7 +18,7 @@
     <TargetExt>.sys</TargetExt>
     <DriverType>KMDF</DriverType>
     <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
-    <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
+    <KMDF_VERSION_MINOR>35</KMDF_VERSION_MINOR>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
 
@@ -31,7 +31,7 @@
     <TargetExt>.sys</TargetExt>
     <DriverType>KMDF</DriverType>
     <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
-    <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
+    <KMDF_VERSION_MINOR>35</KMDF_VERSION_MINOR>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
 
@@ -44,7 +44,7 @@
     <TargetExt>.sys</TargetExt>
     <DriverType>KMDF</DriverType>
     <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
-    <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
+    <KMDF_VERSION_MINOR>35</KMDF_VERSION_MINOR>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
 
@@ -57,7 +57,7 @@
     <TargetExt>.sys</TargetExt>
     <DriverType>KMDF</DriverType>
     <KMDF_VERSION_MAJOR>1</KMDF_VERSION_MAJOR>
-    <KMDF_VERSION_MINOR>33</KMDF_VERSION_MINOR>
+    <KMDF_VERSION_MINOR>35</KMDF_VERSION_MINOR>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
   </PropertyGroup>
 
@@ -74,13 +74,13 @@
   <PropertyGroup>
     <WDKContentRoot Condition="'$(WDKContentRoot)' == ''">$(MSBuildProgramFiles32)\Windows Kits\10\</WDKContentRoot>
     <WDKVersion>10.0.26100.0</WDKVersion>
-    <KmdfIncludeVersion>1.33</KmdfIncludeVersion>
+    <KmdfIncludeVersion>1.35</KmdfIncludeVersion>
   </PropertyGroup>
 
   <ItemDefinitionGroup>
     <ClCompile>
       <AdditionalIncludeDirectories>src;$(WDKContentRoot)Include\$(WDKVersion)\km;$(WDKContentRoot)Include\$(WDKVersion)\shared;$(WDKContentRoot)Include\$(WDKVersion)\um;$(WDKContentRoot)Include\wdf\kmdf\$(KmdfIncludeVersion);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>_KERNEL_MODE;KMDF_VERSION_MAJOR=1;KMDF_VERSION_MINOR=33;_AMD64_;AMD64;NTSTRSAFE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_KERNEL_MODE;KMDF_VERSION_MAJOR=1;KMDF_VERSION_MINOR=35;_AMD64_;AMD64;NTSTRSAFE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>false</TreatWarningAsError>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
@@ -138,7 +138,7 @@
 
   <!-- INF file -->
   <ItemGroup>
-    <Inf Include="node-null.inf" />
+    <Inf Include="ghostcom.inf" />
   </ItemGroup>
 
   <!-- Platform configurations -->

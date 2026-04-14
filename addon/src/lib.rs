@@ -1,6 +1,6 @@
-//! # node-null native addon
+//! # GhostCOM native addon
 //!
-//! Rust/napi-rs bridge between the node-null kernel driver and
+//! Rust/napi-rs bridge between the GhostCOM kernel driver and
 //! the JavaScript/TypeScript API.
 //!
 //! This addon provides:

@@ -1,7 +1,7 @@
 /*
  * control.c — Control device for port management.
  *
- * The control device (\\.\VCOMControl) handles creation, destruction,
+ * The control device (\\.\GCOMControl) handles creation, destruction,
  * and enumeration of virtual COM port pairs.
  */
 
@@ -10,29 +10,29 @@
 /* ── Tracing ──────────────────────────────────────────────────── */
 
 #define TraceEvents(level, flag, msg, ...) \
-    KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL, "node-null [CTRL]: " msg "\n", ##__VA_ARGS__))
+    KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL, "ghostcom [CTRL]: " msg "\n", ##__VA_ARGS__))
 
 /* ── Symbolic link for the control device ─────────────────────── */
 
-static const WCHAR ControlDeviceNameBuf[] = L"\\Device\\VCOMControl";
-static const WCHAR ControlSymLinkBuf[] = L"\\DosDevices\\VCOMControl";
+static const WCHAR ControlDeviceNameBuf[] = L"\\Device\\GCOMControl";
+static const WCHAR ControlSymLinkBuf[] = L"\\DosDevices\\GCOMControl";
 
 /*
  * Module-level pointer to the FDO device context.
- * Set during VcomControlDeviceCreate and used by the IOCTL dispatch
+ * Set during GcomControlDeviceCreate and used by the IOCTL dispatch
  * to find the port table. This avoids fragile parent-object traversal.
  *
  * Safe because there is only ever one FDO instance (root-enumerated).
  */
-static PVCOM_DEVICE_CTX g_DevCtx = NULL;
+static PGCOM_DEVICE_CTX g_DevCtx = NULL;
 
 
 /* ── Create the control device ────────────────────────────────── */
 
 NTSTATUS
-VcomControlDeviceCreate(
+GcomControlDeviceCreate(
     _In_ WDFDEVICE ParentDevice,
-    _In_ PVCOM_DEVICE_CTX DevCtx
+    _In_ PGCOM_DEVICE_CTX DevCtx
 )
 {
     NTSTATUS status;
@@ -80,7 +80,7 @@ VcomControlDeviceCreate(
 
     DevCtx->ControlDevice = controlDevice;
 
-    /* Create a symbolic link so user-mode can open \\.\VCOMControl. */
+    /* Create a symbolic link so user-mode can open \\.\GCOMControl. */
     UNICODE_STRING controlSymLink;
     RtlInitUnicodeString(&controlSymLink, ControlSymLinkBuf);
     status = WdfDeviceCreateSymbolicLink(controlDevice, &controlSymLink);
@@ -92,7 +92,7 @@ VcomControlDeviceCreate(
     /* ── Create an I/O queue for IOCTLs ─────────────────────── */
 
     WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&queueConfig, WdfIoQueueDispatchSequential);
-    queueConfig.EvtIoDeviceControl = VcomControlIoDeviceControl;
+    queueConfig.EvtIoDeviceControl = GcomControlIoDeviceControl;
 
     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
     attributes.ParentObject = controlDevice;
@@ -109,29 +109,29 @@ VcomControlDeviceCreate(
     /* Finish initializing the control device (makes it accessible). */
     WdfControlFinishInitializing(controlDevice);
 
-    TraceEvents(0, 0, "Control device created: \\Device\\VCOMControl");
+    TraceEvents(0, 0, "Control device created: \\Device\\GCOMControl");
 
     return STATUS_SUCCESS;
 }
 
 
-/* ── Handle IOCTL_VCOM_CREATE_PORT ────────────────────────────── */
+/* ── Handle IOCTL_GCOM_CREATE_PORT ────────────────────────────── */
 
 static VOID
-VcomHandleCreatePort(
-    _In_ PVCOM_DEVICE_CTX DevCtx,
+GcomHandleCreatePort(
+    _In_ PGCOM_DEVICE_CTX DevCtx,
     _In_ WDFREQUEST Request
 )
 {
     NTSTATUS status;
-    PVCOM_CREATE_PORT_REQUEST input;
-    PVCOM_CREATE_PORT_RESPONSE output;
+    PGCOM_CREATE_PORT_REQUEST input;
+    PGCOM_CREATE_PORT_RESPONSE output;
     size_t inputLen, outputLen;
-    PVCOM_PORT_PAIR portPair = NULL;
+    PGCOM_PORT_PAIR portPair = NULL;
 
     /* Validate buffers. */
     status = WdfRequestRetrieveInputBuffer(
-        Request, sizeof(VCOM_CREATE_PORT_REQUEST),
+        Request, sizeof(GCOM_CREATE_PORT_REQUEST),
         (PVOID*)&input, &inputLen
     );
     if (!NT_SUCCESS(status)) {
@@ -140,7 +140,7 @@ VcomHandleCreatePort(
     }
 
     status = WdfRequestRetrieveOutputBuffer(
-        Request, sizeof(VCOM_CREATE_PORT_RESPONSE),
+        Request, sizeof(GCOM_CREATE_PORT_RESPONSE),
         (PVOID*)&output, &outputLen
     );
     if (!NT_SUCCESS(status)) {
@@ -150,7 +150,7 @@ VcomHandleCreatePort(
 
     /* Create the port pair (need the WDFDRIVER for creating control devices). */
     WDFDRIVER driver = WdfDeviceGetDriver(DevCtx->ControlDevice);
-    status = VcomPortPairCreate(driver, DevCtx, input->PortNumber, &portPair);
+    status = GcomPortPairCreate(driver, DevCtx, input->PortNumber, &portPair);
     if (!NT_SUCCESS(status)) {
         WdfRequestComplete(Request, status);
         return;
@@ -161,27 +161,27 @@ VcomHandleCreatePort(
     output->CompanionIndex = portPair->CompanionIndex;
 
     WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
-                                      sizeof(VCOM_CREATE_PORT_RESPONSE));
+                                      sizeof(GCOM_CREATE_PORT_RESPONSE));
 
-    TraceEvents(0, 0, "Created port pair: COM%lu ↔ VCOMCompanion%lu",
+    TraceEvents(0, 0, "Created port pair: COM%lu ↔ GCOM%lu",
                 portPair->PortNumber, portPair->CompanionIndex);
 }
 
 
-/* ── Handle IOCTL_VCOM_DESTROY_PORT ───────────────────────────── */
+/* ── Handle IOCTL_GCOM_DESTROY_PORT ───────────────────────────── */
 
 static VOID
-VcomHandleDestroyPort(
-    _In_ PVCOM_DEVICE_CTX DevCtx,
+GcomHandleDestroyPort(
+    _In_ PGCOM_DEVICE_CTX DevCtx,
     _In_ WDFREQUEST Request
 )
 {
     NTSTATUS status;
-    PVCOM_DESTROY_PORT_REQUEST input;
+    PGCOM_DESTROY_PORT_REQUEST input;
     size_t inputLen;
 
     status = WdfRequestRetrieveInputBuffer(
-        Request, sizeof(VCOM_DESTROY_PORT_REQUEST),
+        Request, sizeof(GCOM_DESTROY_PORT_REQUEST),
         (PVOID*)&input, &inputLen
     );
     if (!NT_SUCCESS(status)) {
@@ -190,10 +190,10 @@ VcomHandleDestroyPort(
     }
 
     /* Find the port pair by companion index. */
-    PVCOM_PORT_PAIR portPair = NULL;
+    PGCOM_PORT_PAIR portPair = NULL;
 
     WdfSpinLockAcquire(DevCtx->PortTableLock);
-    for (ULONG i = 0; i < VCOM_MAX_PORTS; i++) {
+    for (ULONG i = 0; i < GCOM_MAX_PORTS; i++) {
         if (DevCtx->Ports[i] &&
             DevCtx->Ports[i]->CompanionIndex == input->CompanionIndex &&
             DevCtx->Ports[i]->Active)
@@ -209,7 +209,7 @@ VcomHandleDestroyPort(
         return;
     }
 
-    VcomPortPairDestroy(DevCtx, portPair);
+    GcomPortPairDestroy(DevCtx, portPair);
 
     WdfRequestComplete(Request, STATUS_SUCCESS);
 
@@ -218,11 +218,11 @@ VcomHandleDestroyPort(
 }
 
 
-/* ── Handle IOCTL_VCOM_LIST_PORTS ─────────────────────────────── */
+/* ── Handle IOCTL_GCOM_LIST_PORTS ─────────────────────────────── */
 
 static VOID
-VcomHandleListPorts(
-    _In_ PVCOM_DEVICE_CTX DevCtx,
+GcomHandleListPorts(
+    _In_ PGCOM_DEVICE_CTX DevCtx,
     _In_ WDFREQUEST Request
 )
 {
@@ -232,7 +232,7 @@ VcomHandleListPorts(
 
     status = WdfRequestRetrieveOutputBuffer(
         Request,
-        sizeof(VCOM_LIST_PORTS_HEADER),
+        sizeof(GCOM_LIST_PORTS_HEADER),
         &outputBuf,
         &outputLen
     );
@@ -241,20 +241,20 @@ VcomHandleListPorts(
         return;
     }
 
-    PVCOM_LIST_PORTS_HEADER header = (PVCOM_LIST_PORTS_HEADER)outputBuf;
-    PVCOM_PORT_INFO entries = (PVCOM_PORT_INFO)((PUCHAR)outputBuf +
-                              sizeof(VCOM_LIST_PORTS_HEADER));
+    PGCOM_LIST_PORTS_HEADER header = (PGCOM_LIST_PORTS_HEADER)outputBuf;
+    PGCOM_PORT_INFO entries = (PGCOM_PORT_INFO)((PUCHAR)outputBuf +
+                              sizeof(GCOM_LIST_PORTS_HEADER));
 
     ULONG maxEntries = (ULONG)(
-        (outputLen - sizeof(VCOM_LIST_PORTS_HEADER)) / sizeof(VCOM_PORT_INFO)
+        (outputLen - sizeof(GCOM_LIST_PORTS_HEADER)) / sizeof(GCOM_PORT_INFO)
     );
 
     ULONG count = 0;
 
     WdfSpinLockAcquire(DevCtx->PortTableLock);
-    for (ULONG i = 0; i < VCOM_MAX_PORTS && count < maxEntries; i++) {
+    for (ULONG i = 0; i < GCOM_MAX_PORTS && count < maxEntries; i++) {
         if (DevCtx->Ports[i] && DevCtx->Ports[i]->Active) {
-            PVCOM_PORT_PAIR pp = DevCtx->Ports[i];
+            PGCOM_PORT_PAIR pp = DevCtx->Ports[i];
             entries[count].PortNumber = pp->PortNumber;
             entries[count].CompanionIndex = pp->CompanionIndex;
             entries[count].ComSideOpen = pp->ComSideOpen ? 1 : 0;
@@ -266,25 +266,25 @@ VcomHandleListPorts(
 
     header->Count = count;
 
-    size_t bytesWritten = sizeof(VCOM_LIST_PORTS_HEADER) +
-                          count * sizeof(VCOM_PORT_INFO);
+    size_t bytesWritten = sizeof(GCOM_LIST_PORTS_HEADER) +
+                          count * sizeof(GCOM_PORT_INFO);
     WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, bytesWritten);
 }
 
 
-/* ── Handle IOCTL_VCOM_GET_VERSION ────────────────────────────── */
+/* ── Handle IOCTL_GCOM_GET_VERSION ────────────────────────────── */
 
 static VOID
-VcomHandleGetVersion(
+GcomHandleGetVersion(
     _In_ WDFREQUEST Request
 )
 {
     NTSTATUS status;
-    PVCOM_VERSION_INFO output;
+    PGCOM_VERSION_INFO output;
     size_t outputLen;
 
     status = WdfRequestRetrieveOutputBuffer(
-        Request, sizeof(VCOM_VERSION_INFO),
+        Request, sizeof(GCOM_VERSION_INFO),
         (PVOID*)&output, &outputLen
     );
     if (!NT_SUCCESS(status)) {
@@ -292,20 +292,20 @@ VcomHandleGetVersion(
         return;
     }
 
-    output->Major = VCOM_VERSION_MAJOR;
-    output->Minor = VCOM_VERSION_MINOR;
-    output->Patch = VCOM_VERSION_PATCH;
+    output->Major = GCOM_VERSION_MAJOR;
+    output->Minor = GCOM_VERSION_MINOR;
+    output->Patch = GCOM_VERSION_PATCH;
     output->Reserved = 0;
 
     WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
-                                      sizeof(VCOM_VERSION_INFO));
+                                      sizeof(GCOM_VERSION_INFO));
 }
 
 
 /* ── Control device IOCTL dispatch ────────────────────────────── */
 
 VOID
-VcomControlIoDeviceControl(
+GcomControlIoDeviceControl(
     _In_ WDFQUEUE   Queue,
     _In_ WDFREQUEST Request,
     _In_ size_t     OutputBufferLength,
@@ -317,23 +317,23 @@ VcomControlIoDeviceControl(
     UNREFERENCED_PARAMETER(OutputBufferLength);
     UNREFERENCED_PARAMETER(InputBufferLength);
 
-    PVCOM_DEVICE_CTX devCtx = g_DevCtx;
+    PGCOM_DEVICE_CTX devCtx = g_DevCtx;
 
     switch (IoControlCode) {
-    case IOCTL_VCOM_CREATE_PORT:
-        VcomHandleCreatePort(devCtx, Request);
+    case IOCTL_GCOM_CREATE_PORT:
+        GcomHandleCreatePort(devCtx, Request);
         break;
 
-    case IOCTL_VCOM_DESTROY_PORT:
-        VcomHandleDestroyPort(devCtx, Request);
+    case IOCTL_GCOM_DESTROY_PORT:
+        GcomHandleDestroyPort(devCtx, Request);
         break;
 
-    case IOCTL_VCOM_LIST_PORTS:
-        VcomHandleListPorts(devCtx, Request);
+    case IOCTL_GCOM_LIST_PORTS:
+        GcomHandleListPorts(devCtx, Request);
         break;
 
-    case IOCTL_VCOM_GET_VERSION:
-        VcomHandleGetVersion(Request);
+    case IOCTL_GCOM_GET_VERSION:
+        GcomHandleGetVersion(Request);
         break;
 
     default:

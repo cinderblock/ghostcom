@@ -1,7 +1,7 @@
 //! Control device operations — create, destroy, list virtual ports.
 //!
 //! These functions communicate with the driver's control device
-//! (`\\.\VCOMControl`) via synchronous IOCTLs.
+//! (`\\.\GCOMControl`) via synchronous IOCTLs.
 
 use std::mem;
 
@@ -14,7 +14,7 @@ use crate::ioctl::*;
 use crate::overlapped::{device_ioctl, open_device_sync};
 
 /// Path to the driver's control device.
-const CONTROL_DEVICE_PATH: &str = "\\\\.\\VCOMControl";
+const CONTROL_DEVICE_PATH: &str = "\\\\.\\GCOMControl";
 
 /// Result of creating a new virtual port.
 #[napi(object)]
@@ -34,7 +34,7 @@ pub struct PortInfoJs {
 
 /// Create a new virtual COM port pair.
 ///
-/// Sends IOCTL_VCOM_CREATE_PORT to the control device.
+/// Sends IOCTL_GCOM_CREATE_PORT to the control device.
 ///
 /// `port_number`: 0 for auto-assignment, or a specific COM port number.
 #[napi]
@@ -42,17 +42,17 @@ pub fn create_port(port_number: u32) -> Result<CreatePortResult> {
     let handle = open_device_sync(CONTROL_DEVICE_PATH)
         .map_err(|_| error::driver_not_found())?;
 
-    let request = VcomCreatePortRequest { port_number };
-    let mut response = VcomCreatePortResponse::default();
+    let request = GcomCreatePortRequest { port_number };
+    let mut response = GcomCreatePortResponse::default();
 
     let result = unsafe {
         device_ioctl(
             handle,
-            IOCTL_VCOM_CREATE_PORT,
+            IOCTL_GCOM_CREATE_PORT,
             &request as *const _ as *const u8,
-            mem::size_of::<VcomCreatePortRequest>() as u32,
+            mem::size_of::<GcomCreatePortRequest>() as u32,
             &mut response as *mut _ as *mut u8,
-            mem::size_of::<VcomCreatePortResponse>() as u32,
+            mem::size_of::<GcomCreatePortResponse>() as u32,
         )
     };
 
@@ -68,20 +68,20 @@ pub fn create_port(port_number: u32) -> Result<CreatePortResult> {
 
 /// Destroy a virtual COM port pair.
 ///
-/// Sends IOCTL_VCOM_DESTROY_PORT to the control device.
+/// Sends IOCTL_GCOM_DESTROY_PORT to the control device.
 #[napi]
 pub fn destroy_port(companion_index: u32) -> Result<()> {
     let handle = open_device_sync(CONTROL_DEVICE_PATH)
         .map_err(|_| error::driver_not_found())?;
 
-    let request = VcomDestroyPortRequest { companion_index };
+    let request = GcomDestroyPortRequest { companion_index };
 
     let result = unsafe {
         device_ioctl(
             handle,
-            IOCTL_VCOM_DESTROY_PORT,
+            IOCTL_GCOM_DESTROY_PORT,
             &request as *const _ as *const u8,
-            mem::size_of::<VcomDestroyPortRequest>() as u32,
+            mem::size_of::<GcomDestroyPortRequest>() as u32,
             std::ptr::null_mut(),
             0,
         )
@@ -95,7 +95,7 @@ pub fn destroy_port(companion_index: u32) -> Result<()> {
 
 /// List all active virtual COM port pairs.
 ///
-/// Sends IOCTL_VCOM_LIST_PORTS to the control device.
+/// Sends IOCTL_GCOM_LIST_PORTS to the control device.
 #[napi]
 pub fn list_ports() -> Result<Vec<PortInfoJs>> {
     let handle = open_device_sync(CONTROL_DEVICE_PATH)
@@ -103,14 +103,14 @@ pub fn list_ports() -> Result<Vec<PortInfoJs>> {
 
     // Allocate enough space for the header + up to 64 port entries.
     const MAX_PORTS: usize = 64;
-    let buf_size = mem::size_of::<VcomListPortsHeader>()
-        + MAX_PORTS * mem::size_of::<VcomPortInfo>();
+    let buf_size = mem::size_of::<GcomListPortsHeader>()
+        + MAX_PORTS * mem::size_of::<GcomPortInfo>();
     let mut buffer = vec![0u8; buf_size];
 
     let bytes_returned = unsafe {
         device_ioctl(
             handle,
-            IOCTL_VCOM_LIST_PORTS,
+            IOCTL_GCOM_LIST_PORTS,
             std::ptr::null(),
             0,
             buffer.as_mut_ptr(),
@@ -122,17 +122,17 @@ pub fn list_ports() -> Result<Vec<PortInfoJs>> {
 
     let bytes_returned = bytes_returned?;
 
-    if (bytes_returned as usize) < mem::size_of::<VcomListPortsHeader>() {
+    if (bytes_returned as usize) < mem::size_of::<GcomListPortsHeader>() {
         return Ok(vec![]);
     }
 
     let header = unsafe {
-        &*(buffer.as_ptr() as *const VcomListPortsHeader)
+        &*(buffer.as_ptr() as *const GcomListPortsHeader)
     };
 
     let count = header.count as usize;
     let entries_ptr = unsafe {
-        buffer.as_ptr().add(mem::size_of::<VcomListPortsHeader>()) as *const VcomPortInfo
+        buffer.as_ptr().add(mem::size_of::<GcomListPortsHeader>()) as *const GcomPortInfo
     };
 
     let mut ports = Vec::with_capacity(count);
@@ -149,7 +149,7 @@ pub fn list_ports() -> Result<Vec<PortInfoJs>> {
     Ok(ports)
 }
 
-/// Check whether the VCOM driver is installed and accessible.
+/// Check whether the GCOM driver is installed and accessible.
 #[napi]
 pub fn is_driver_available() -> bool {
     match open_device_sync(CONTROL_DEVICE_PATH) {
@@ -172,16 +172,16 @@ pub fn get_driver_version() -> Result<Option<String>> {
         Err(_) => return Ok(None),
     };
 
-    let mut version = VcomVersionInfo::default();
+    let mut version = GcomVersionInfo::default();
 
     let result = unsafe {
         device_ioctl(
             handle,
-            IOCTL_VCOM_GET_VERSION,
+            IOCTL_GCOM_GET_VERSION,
             std::ptr::null(),
             0,
             &mut version as *mut _ as *mut u8,
-            mem::size_of::<VcomVersionInfo>() as u32,
+            mem::size_of::<GcomVersionInfo>() as u32,
         )
     };
 

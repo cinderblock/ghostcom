@@ -9,8 +9,8 @@ use std::mem;
 
 // ── Device type ──────────────────────────────────────────────────
 
-/// Private device type for VCOM IOCTLs.
-pub const VCOM_DEVICE_TYPE: u32 = 0x8001;
+/// Private device type for GCOM IOCTLs.
+pub const GCOM_DEVICE_TYPE: u32 = 0x8001;
 
 // ── CTL_CODE macro ───────────────────────────────────────────────
 
@@ -26,79 +26,79 @@ const FILE_WRITE_ACCESS: u32 = 2;
 // ── Control device IOCTLs ────────────────────────────────────────
 
 /// Create a new virtual COM port pair (COM device + companion device).
-pub const IOCTL_VCOM_CREATE_PORT: u32 =
-    ctl_code(VCOM_DEVICE_TYPE, 0x800, METHOD_BUFFERED, FILE_WRITE_ACCESS);
+pub const IOCTL_GCOM_CREATE_PORT: u32 =
+    ctl_code(GCOM_DEVICE_TYPE, 0x800, METHOD_BUFFERED, FILE_WRITE_ACCESS);
 
 /// Destroy an existing virtual COM port pair.
-pub const IOCTL_VCOM_DESTROY_PORT: u32 =
-    ctl_code(VCOM_DEVICE_TYPE, 0x801, METHOD_BUFFERED, FILE_WRITE_ACCESS);
+pub const IOCTL_GCOM_DESTROY_PORT: u32 =
+    ctl_code(GCOM_DEVICE_TYPE, 0x801, METHOD_BUFFERED, FILE_WRITE_ACCESS);
 
 /// List all active virtual COM port pairs.
-pub const IOCTL_VCOM_LIST_PORTS: u32 =
-    ctl_code(VCOM_DEVICE_TYPE, 0x802, METHOD_BUFFERED, FILE_READ_ACCESS);
+pub const IOCTL_GCOM_LIST_PORTS: u32 =
+    ctl_code(GCOM_DEVICE_TYPE, 0x802, METHOD_BUFFERED, FILE_READ_ACCESS);
 
 /// Query driver version information.
-pub const IOCTL_VCOM_GET_VERSION: u32 =
-    ctl_code(VCOM_DEVICE_TYPE, 0x803, METHOD_BUFFERED, FILE_READ_ACCESS);
+pub const IOCTL_GCOM_GET_VERSION: u32 =
+    ctl_code(GCOM_DEVICE_TYPE, 0x803, METHOD_BUFFERED, FILE_READ_ACCESS);
 
 // ── Companion device IOCTLs ──────────────────────────────────────
 
 /// Wait for a signal change on the COM side (overlapped / inverted call).
 /// The driver holds this IRP until a signal changes, then completes it
-/// with a `VcomSignalState` payload.
-pub const IOCTL_VCOM_WAIT_SIGNAL_CHANGE: u32 =
-    ctl_code(VCOM_DEVICE_TYPE, 0x810, METHOD_BUFFERED, FILE_READ_ACCESS);
+/// with a `GcomSignalState` payload.
+pub const IOCTL_GCOM_WAIT_SIGNAL_CHANGE: u32 =
+    ctl_code(GCOM_DEVICE_TYPE, 0x810, METHOD_BUFFERED, FILE_READ_ACCESS);
 
 /// Get the current signal state snapshot (synchronous).
-pub const IOCTL_VCOM_GET_SIGNALS: u32 =
-    ctl_code(VCOM_DEVICE_TYPE, 0x811, METHOD_BUFFERED, FILE_READ_ACCESS);
+pub const IOCTL_GCOM_GET_SIGNALS: u32 =
+    ctl_code(GCOM_DEVICE_TYPE, 0x811, METHOD_BUFFERED, FILE_READ_ACCESS);
 
 /// Set companion-side output signals (DTR, RTS) that appear on the
 /// COM side through null-modem crossover.
-pub const IOCTL_VCOM_SET_SIGNALS: u32 =
-    ctl_code(VCOM_DEVICE_TYPE, 0x812, METHOD_BUFFERED, FILE_WRITE_ACCESS);
+pub const IOCTL_GCOM_SET_SIGNALS: u32 =
+    ctl_code(GCOM_DEVICE_TYPE, 0x812, METHOD_BUFFERED, FILE_WRITE_ACCESS);
 
 // ── Data structures ──────────────────────────────────────────────
 
-/// Request payload for IOCTL_VCOM_CREATE_PORT.
+/// Request payload for IOCTL_GCOM_CREATE_PORT.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct VcomCreatePortRequest {
+pub struct GcomCreatePortRequest {
     /// Desired COM port number, or 0 for auto-assignment.
     pub port_number: u32,
 }
 
-/// Response payload for IOCTL_VCOM_CREATE_PORT.
+/// Response payload for IOCTL_GCOM_CREATE_PORT.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct VcomCreatePortResponse {
+pub struct GcomCreatePortResponse {
     /// The assigned COM port number (e.g., 10 for COM10).
     pub port_number: u32,
-    /// The companion device index (used to open \\.\VCOMCompanion<N>).
+    /// The companion device index (used to open \\.\GCOM<N>).
     pub companion_index: u32,
 }
 
-/// Per-port status information, returned by IOCTL_VCOM_LIST_PORTS.
+/// Per-port status information, returned by IOCTL_GCOM_LIST_PORTS.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct VcomPortInfo {
+pub struct GcomPortInfo {
     pub port_number: u32,
     pub companion_index: u32,
     pub com_side_open: u32,      // BOOLEAN as u32 for alignment
     pub companion_side_open: u32, // BOOLEAN as u32 for alignment
 }
 
-/// Header for the LIST_PORTS response. Followed by `count` VcomPortInfo entries.
+/// Header for the LIST_PORTS response. Followed by `count` GcomPortInfo entries.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct VcomListPortsHeader {
+pub struct GcomListPortsHeader {
     pub count: u32,
 }
 
 /// Driver version response.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct VcomVersionInfo {
+pub struct GcomVersionInfo {
     pub major: u16,
     pub minor: u16,
     pub patch: u16,
@@ -107,12 +107,12 @@ pub struct VcomVersionInfo {
 
 /// Complete signal state snapshot.
 ///
-/// Returned by IOCTL_VCOM_GET_SIGNALS and IOCTL_VCOM_WAIT_SIGNAL_CHANGE.
+/// Returned by IOCTL_GCOM_GET_SIGNALS and IOCTL_GCOM_WAIT_SIGNAL_CHANGE.
 ///
-/// This structure mirrors the driver's `VCOM_SIGNAL_STATE` exactly.
+/// This structure mirrors the driver's `GCOM_SIGNAL_STATE` exactly.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct VcomSignalState {
+pub struct GcomSignalState {
     /// Monotonically increasing sequence number.
     pub sequence_number: u32,
 
@@ -150,37 +150,37 @@ pub struct VcomSignalState {
     pub wait_mask: u32,
 }
 
-impl Default for VcomSignalState {
+impl Default for GcomSignalState {
     fn default() -> Self {
         // Safe: all-zero is a valid state (9600 baud, no signals).
         unsafe { mem::zeroed() }
     }
 }
 
-/// Payload for IOCTL_VCOM_SET_SIGNALS.
+/// Payload for IOCTL_GCOM_SET_SIGNALS.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct VcomSetSignals {
+pub struct GcomSetSignals {
     pub dtr_state: u32, // BOOLEAN as u32
     pub rts_state: u32, // BOOLEAN as u32
 }
 
-/// Request payload for IOCTL_VCOM_DESTROY_PORT.
+/// Request payload for IOCTL_GCOM_DESTROY_PORT.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct VcomDestroyPortRequest {
+pub struct GcomDestroyPortRequest {
     pub companion_index: u32,
 }
 
 // ── ChangedMask bit definitions ──────────────────────────────────
 
-pub const VCOM_CHANGED_BAUD: u32 = 0x0001;
-pub const VCOM_CHANGED_LINE_CTRL: u32 = 0x0002;
-pub const VCOM_CHANGED_DTR: u32 = 0x0004;
-pub const VCOM_CHANGED_RTS: u32 = 0x0008;
-pub const VCOM_CHANGED_BREAK: u32 = 0x0010;
-pub const VCOM_CHANGED_HANDFLOW: u32 = 0x0020;
-pub const VCOM_CHANGED_CHARS: u32 = 0x0040;
-pub const VCOM_CHANGED_WAIT_MASK: u32 = 0x0080;
-pub const VCOM_CHANGED_COM_OPEN: u32 = 0x0100;
-pub const VCOM_CHANGED_COM_CLOSE: u32 = 0x0200;
+pub const GCOM_CHANGED_BAUD: u32 = 0x0001;
+pub const GCOM_CHANGED_LINE_CTRL: u32 = 0x0002;
+pub const GCOM_CHANGED_DTR: u32 = 0x0004;
+pub const GCOM_CHANGED_RTS: u32 = 0x0008;
+pub const GCOM_CHANGED_BREAK: u32 = 0x0010;
+pub const GCOM_CHANGED_HANDFLOW: u32 = 0x0020;
+pub const GCOM_CHANGED_CHARS: u32 = 0x0040;
+pub const GCOM_CHANGED_WAIT_MASK: u32 = 0x0080;
+pub const GCOM_CHANGED_COM_OPEN: u32 = 0x0100;
+pub const GCOM_CHANGED_COM_CLOSE: u32 = 0x0200;

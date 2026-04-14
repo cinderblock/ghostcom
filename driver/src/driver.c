@@ -1,5 +1,5 @@
 /*
- * driver.c — DriverEntry and EvtDeviceAdd for the node-null driver.
+ * driver.c — DriverEntry and EvtDeviceAdd for the GhostCOM driver.
  *
  * This is a root-enumerated software-only KMDF driver. It creates
  * a single FDO that hosts all virtual COM port pairs and the control
@@ -11,7 +11,7 @@
 /* ── WPP Tracing (stub — replace with real WPP for production) ── */
 
 #define TraceEvents(level, flag, msg, ...) \
-    KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL, "node-null: " msg "\n", ##__VA_ARGS__))
+    KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL, "ghostcom: " msg "\n", ##__VA_ARGS__))
 
 
 /* ── DriverEntry ──────────────────────────────────────────────── */
@@ -27,7 +27,7 @@ DriverEntry(
 
     TraceEvents(0, 0, "DriverEntry");
 
-    WDF_DRIVER_CONFIG_INIT(&config, VcomEvtDeviceAdd);
+    WDF_DRIVER_CONFIG_INIT(&config, GcomEvtDeviceAdd);
 
     status = WdfDriverCreate(
         DriverObject,
@@ -54,7 +54,7 @@ DriverEntry(
  */
 
 NTSTATUS
-VcomEvtDeviceD0Entry(
+GcomEvtDeviceD0Entry(
     _In_ WDFDEVICE Device,
     _In_ WDF_POWER_DEVICE_STATE PreviousState
 )
@@ -66,7 +66,7 @@ VcomEvtDeviceD0Entry(
 }
 
 NTSTATUS
-VcomEvtDeviceD0Exit(
+GcomEvtDeviceD0Exit(
     _In_ WDFDEVICE Device,
     _In_ WDF_POWER_DEVICE_STATE TargetState
 )
@@ -78,18 +78,18 @@ VcomEvtDeviceD0Exit(
 }
 
 VOID
-VcomEvtSelfManagedIoCleanup(
+GcomEvtSelfManagedIoCleanup(
     _In_ WDFDEVICE Device
 )
 {
-    PVCOM_DEVICE_CTX devCtx = VcomGetDeviceContext(Device);
+    PGCOM_DEVICE_CTX devCtx = GcomGetDeviceContext(Device);
 
     TraceEvents(0, 0, "SelfManagedIoCleanup — destroying all port pairs");
 
     /* Tear down all active port pairs on driver stop/unload. */
-    for (ULONG i = 0; i < VCOM_MAX_PORTS; i++) {
+    for (ULONG i = 0; i < GCOM_MAX_PORTS; i++) {
         if (devCtx->Ports[i] && devCtx->Ports[i]->Active) {
-            VcomPortPairDestroy(devCtx, devCtx->Ports[i]);
+            GcomPortPairDestroy(devCtx, devCtx->Ports[i]);
         }
     }
 }
@@ -98,7 +98,7 @@ VcomEvtSelfManagedIoCleanup(
 /* ── EvtDeviceAdd ─────────────────────────────────────────────── */
 
 NTSTATUS
-VcomEvtDeviceAdd(
+GcomEvtDeviceAdd(
     _In_ WDFDRIVER       Driver,
     _Inout_ PWDFDEVICE_INIT DeviceInit
 )
@@ -106,11 +106,11 @@ VcomEvtDeviceAdd(
     NTSTATUS status;
     WDF_OBJECT_ATTRIBUTES devAttributes;
     WDFDEVICE device;
-    PVCOM_DEVICE_CTX devCtx;
+    PGCOM_DEVICE_CTX devCtx;
 
     UNREFERENCED_PARAMETER(Driver);
 
-    TraceEvents(0, 0, "VcomEvtDeviceAdd");
+    TraceEvents(0, 0, "GcomEvtDeviceAdd");
 
     /* ── Configure the device init ──────────────────────────── */
 
@@ -122,7 +122,7 @@ VcomEvtDeviceAdd(
 
     /* Set a device name so we can create a control device symlink. */
     UNICODE_STRING deviceName;
-    RtlInitUnicodeString(&deviceName, L"\\Device\\NodeNull");
+    RtlInitUnicodeString(&deviceName, L"\\Device\\GhostCOM");
     status = WdfDeviceInitAssignName(DeviceInit, &deviceName);
     if (!NT_SUCCESS(status)) {
         TraceEvents(0, 0, "WdfDeviceInitAssignName failed: 0x%08X", status);
@@ -143,15 +143,15 @@ VcomEvtDeviceAdd(
     {
         WDF_PNPPOWER_EVENT_CALLBACKS pnpCallbacks;
         WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpCallbacks);
-        pnpCallbacks.EvtDeviceD0Entry = VcomEvtDeviceD0Entry;
-        pnpCallbacks.EvtDeviceD0Exit = VcomEvtDeviceD0Exit;
-        pnpCallbacks.EvtDeviceSelfManagedIoCleanup = VcomEvtSelfManagedIoCleanup;
+        pnpCallbacks.EvtDeviceD0Entry = GcomEvtDeviceD0Entry;
+        pnpCallbacks.EvtDeviceD0Exit = GcomEvtDeviceD0Exit;
+        pnpCallbacks.EvtDeviceSelfManagedIoCleanup = GcomEvtSelfManagedIoCleanup;
         WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnpCallbacks);
     }
 
     /* ── Create the device ──────────────────────────────────── */
 
-    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&devAttributes, VCOM_DEVICE_CTX);
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&devAttributes, GCOM_DEVICE_CTX);
     devAttributes.EvtCleanupCallback = NULL;
 
     status = WdfDeviceCreate(&DeviceInit, &devAttributes, &device);
@@ -162,8 +162,8 @@ VcomEvtDeviceAdd(
 
     /* ── Initialize device context ──────────────────────────── */
 
-    devCtx = VcomGetDeviceContext(device);
-    RtlZeroMemory(devCtx, sizeof(VCOM_DEVICE_CTX));
+    devCtx = GcomGetDeviceContext(device);
+    RtlZeroMemory(devCtx, sizeof(GCOM_DEVICE_CTX));
     devCtx->NextCompanionIndex = 0;
 
     /* Create spinlock for the port table. */
@@ -179,9 +179,9 @@ VcomEvtDeviceAdd(
 
     /* ── Create the control device ──────────────────────────── */
 
-    status = VcomControlDeviceCreate(device, devCtx);
+    status = GcomControlDeviceCreate(device, devCtx);
     if (!NT_SUCCESS(status)) {
-        TraceEvents(0, 0, "VcomControlDeviceCreate failed: 0x%08X", status);
+        TraceEvents(0, 0, "GcomControlDeviceCreate failed: 0x%08X", status);
         return status;
     }
 

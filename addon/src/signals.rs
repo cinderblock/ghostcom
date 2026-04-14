@@ -1,7 +1,7 @@
 //! Signal change notification thread.
 //!
 //! Runs a dedicated OS thread that issues overlapped
-//! IOCTL_VCOM_WAIT_SIGNAL_CHANGE requests to the companion device.
+//! IOCTL_GCOM_WAIT_SIGNAL_CHANGE requests to the companion device.
 //! When the driver completes the request (because a signal changed
 //! on the COM side), the thread invokes a ThreadsafeFunction to
 //! deliver the signal state snapshot to the JavaScript event loop.
@@ -47,8 +47,8 @@ pub struct RawSignalStateJs {
     pub wait_mask: u32,
 }
 
-impl From<&VcomSignalState> for RawSignalStateJs {
-    fn from(s: &VcomSignalState) -> Self {
+impl From<&GcomSignalState> for RawSignalStateJs {
+    fn from(s: &GcomSignalState) -> Self {
         Self {
             sequence_number: s.sequence_number,
             changed_mask: s.changed_mask,
@@ -84,7 +84,7 @@ impl SignalWatcher {
     /// Start the signal notification thread.
     ///
     /// `handle` must be a valid, overlapped-capable handle to a
-    /// companion device (`\\.\VCOMCompanion<N>`).
+    /// companion device (`\\.\GCOM<N>`).
     ///
     /// `callback` is a ThreadsafeFunction that will be called on the
     /// JS event loop thread whenever a signal changes.
@@ -96,7 +96,7 @@ impl SignalWatcher {
         let shutdown_clone = shutdown.clone();
 
         let thread = thread::Builder::new()
-            .name("vcom-signal-watcher".into())
+            .name("gcom-signal-watcher".into())
             .spawn(move || {
                 Self::thread_main(handle, callback, shutdown_clone);
             })
@@ -126,7 +126,7 @@ impl SignalWatcher {
         let mut overlapped = match OverlappedEvent::new() {
             Ok(o) => o,
             Err(e) => {
-                eprintln!("node-null: failed to create overlapped event for signal watcher: {e}");
+                eprintln!("ghostcom: failed to create overlapped event for signal watcher: {e}");
                 return;
             }
         };
@@ -136,17 +136,17 @@ impl SignalWatcher {
                 break;
             }
 
-            let mut signal_state = VcomSignalState::default();
+            let mut signal_state = GcomSignalState::default();
 
             // Issue the overlapped WAIT_SIGNAL_CHANGE IOCTL.
             let ioctl_result = unsafe {
                 device_ioctl_overlapped(
                     handle.raw(),
-                    IOCTL_VCOM_WAIT_SIGNAL_CHANGE,
+                    IOCTL_GCOM_WAIT_SIGNAL_CHANGE,
                     std::ptr::null(),
                     0,
                     &mut signal_state as *mut _ as *mut u8,
-                    mem::size_of::<VcomSignalState>() as u32,
+                    mem::size_of::<GcomSignalState>() as u32,
                     &mut overlapped,
                 )
             };
@@ -155,7 +155,7 @@ impl SignalWatcher {
                 if shutdown.load(Ordering::Acquire) {
                     break;
                 }
-                eprintln!("node-null: signal watcher IOCTL failed: {e}");
+                eprintln!("ghostcom: signal watcher IOCTL failed: {e}");
                 thread::sleep(std::time::Duration::from_millis(100));
                 continue;
             }
@@ -174,7 +174,7 @@ impl SignalWatcher {
             // Get the result (byte count).
             match overlapped.get_result(handle.raw()) {
                 Ok(bytes) => {
-                    if bytes as usize >= mem::size_of::<VcomSignalState>() {
+                    if bytes as usize >= mem::size_of::<GcomSignalState>() {
                         let js_state = RawSignalStateJs::from(&signal_state);
                         callback.call(Ok(js_state), ThreadsafeFunctionCallMode::NonBlocking);
                     }

@@ -37,7 +37,7 @@ impl SendHandle {
 pub fn driver_not_found() -> napi::Error {
     napi::Error::new(
         Status::GenericFailure,
-        "The node-null virtual COM port driver is not installed. \
+        "The GhostCOM virtual COM port driver is not installed. \
          Install it with `bun run install:driver` (requires administrator).",
     )
 }

@@ -40,7 +40,7 @@ export interface NativePortBinding {
 }
 
 /**
- * A virtual COM port backed by the node-null kernel driver.
+ * A virtual COM port backed by the GhostCOM kernel driver.
  *
  * This class represents a single virtual serial port that appears as
  * a real COM port to the rest of the system. External applications
@@ -58,7 +58,7 @@ export interface NativePortBinding {
  *
  * @example
  * ```ts
- * import { createPort, SignalChanged } from "node-null";
+ * import { createPort, SignalChanged } from "ghostcom";
  *
  * const port = await createPort({ portNumber: 10 });
  * console.log(`Created ${port.portName}`);
@@ -232,7 +232,7 @@ export class VirtualPort extends EventEmitter<VirtualPortEventMap> {
  * @param options - Optional configuration for the new port.
  * @returns The newly created virtual port.
  *
- * @throws If the vcom driver is not installed.
+ * @throws If the gcom driver is not installed.
  * @throws If the requested port number is already in use.
  *
  * @example
@@ -244,7 +244,7 @@ export class VirtualPort extends EventEmitter<VirtualPortEventMap> {
  *   console.log("Received:", chunk);
  * });
  *
- * port.stream.write(Buffer.from("Hello from node-null!\r\n"));
+ * port.stream.write(Buffer.from("Hello from GhostCOM!\r\n"));
  * ```
  */
 export async function createPort(
@@ -258,7 +258,7 @@ export async function createPort(
   // Open the companion device and create native bindings.
   // Use createRequire since this is an ESM module loading a .node addon.
   const require = createRequire(import.meta.url);
-  const native = require("../addon/node-null.node");
+  const native = require("../addon/ghostcom.node");
   const portBinding: NativePortBinding = native.openPort(
     result.companionIndex,
   );

@@ -33,3 +33,4 @@ Desktop.ini
 # Env
 .env
 .env.*
+driver/ghostcom/

@@ -1,17 +1,17 @@
 /*
  * companion.c — Companion device: user-mode data I/O + signal wait.
  *
- * The companion device (\\.\VCOMCompanion<N>) is opened by the
- * node-null native addon. It is the "other end" of the null-modem
+ * The companion device (\\.\GCOM<N>) is opened by the
+ * GhostCOM native addon. It is the "other end" of the null-modem
  * pair.
  *
  * Data written here flows into CompanionToCom ring buffer → COM reads.
  * Data readable here comes from ComToCompanion ring buffer → COM writes.
  *
  * The companion also supports:
- *   - IOCTL_VCOM_WAIT_SIGNAL_CHANGE — overlapped, inverted-call pattern
- *   - IOCTL_VCOM_GET_SIGNALS       — synchronous snapshot
- *   - IOCTL_VCOM_SET_SIGNALS       — set companion output signals
+ *   - IOCTL_GCOM_WAIT_SIGNAL_CHANGE — overlapped, inverted-call pattern
+ *   - IOCTL_GCOM_GET_SIGNALS       — synchronous snapshot
+ *   - IOCTL_GCOM_SET_SIGNALS       — set companion output signals
  */
 
 #include "driver.h"
@@ -19,50 +19,50 @@
 /* ── Tracing ──────────────────────────────────────────────────── */
 
 #define TraceEvents(level, flag, msg, ...) \
-    KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL, "node-null [COMP]: " msg "\n", ##__VA_ARGS__))
+    KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL, "ghostcom [COMP]: " msg "\n", ##__VA_ARGS__))
 
 
 /* ── File create / close callbacks ────────────────────────────── */
 
 VOID
-VcomCompEvtFileCreate(
+GcomCompEvtFileCreate(
     _In_ WDFDEVICE     Device,
     _In_ WDFREQUEST    Request,
     _In_ WDFFILEOBJECT FileObject
 )
 {
-    PVCOM_PORT_DEVICE_CTX devCtx = VcomGetPortDeviceContext(Device);
-    PVCOM_PORT_PAIR pp = devCtx->PortPair;
+    PGCOM_PORT_DEVICE_CTX devCtx = GcomGetPortDeviceContext(Device);
+    PGCOM_PORT_PAIR pp = devCtx->PortPair;
 
     /* Only allow one companion connection at a time. */
     if (InterlockedCompareExchange(&pp->CompanionSideOpen, 1, 0) != 0) {
-        TraceEvents(0, 0, "VCOMCompanion%lu: rejected (already open)",
+        TraceEvents(0, 0, "GCOM%lu: rejected (already open)",
                     pp->CompanionIndex);
         WdfRequestComplete(Request, STATUS_SHARING_VIOLATION);
         return;
     }
 
     /* Set up the file context. */
-    PVCOM_FILE_CTX fileCtx = VcomGetFileContext(FileObject);
-    fileCtx->FileType = VcomFileTypeCompanion;
+    PGCOM_FILE_CTX fileCtx = GcomGetFileContext(FileObject);
+    fileCtx->FileType = GcomFileTypeCompanion;
     fileCtx->PortPair = pp;
 
-    TraceEvents(0, 0, "VCOMCompanion%lu opened", pp->CompanionIndex);
+    TraceEvents(0, 0, "GCOM%lu opened", pp->CompanionIndex);
 
     WdfRequestComplete(Request, STATUS_SUCCESS);
 }
 
 VOID
-VcomCompEvtFileClose(
+GcomCompEvtFileClose(
     _In_ WDFFILEOBJECT FileObject
 )
 {
-    PVCOM_FILE_CTX fileCtx = VcomGetFileContext(FileObject);
-    PVCOM_PORT_PAIR pp = fileCtx->PortPair;
+    PGCOM_FILE_CTX fileCtx = GcomGetFileContext(FileObject);
+    PGCOM_PORT_PAIR pp = fileCtx->PortPair;
 
     if (pp) {
         InterlockedExchange(&pp->CompanionSideOpen, 0);
-        TraceEvents(0, 0, "VCOMCompanion%lu closed", pp->CompanionIndex);
+        TraceEvents(0, 0, "GCOM%lu closed", pp->CompanionIndex);
     }
 }
 
@@ -70,10 +70,10 @@ VcomCompEvtFileClose(
 /* ── Companion device creation ────────────────────────────────── */
 
 NTSTATUS
-VcomCompanionCreate(
+GcomCompanionCreate(
     _In_ WDFDRIVER Driver,
-    _In_ PVCOM_DEVICE_CTX DevCtx,
-    _In_ PVCOM_PORT_PAIR PortPair
+    _In_ PGCOM_DEVICE_CTX DevCtx,
+    _In_ PGCOM_PORT_PAIR PortPair
 )
 {
     NTSTATUS status;
@@ -95,11 +95,11 @@ VcomCompanionCreate(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    /* Assign the device name: \Device\VCOMCompanion<N> */
+    /* Assign the device name: \Device\GCOM<N> */
     WCHAR deviceNameBuf[64];
     UNICODE_STRING deviceName;
     RtlStringCbPrintfW(deviceNameBuf, sizeof(deviceNameBuf),
-                       L"\\Device\\VCOMCompanion%lu", PortPair->CompanionIndex);
+                       L"\\Device\\GCOM%lu", PortPair->CompanionIndex);
     RtlInitUnicodeString(&deviceName, deviceNameBuf);
 
     status = WdfDeviceInitAssignName(deviceInit, &deviceName);
@@ -112,17 +112,17 @@ VcomCompanionCreate(
 
     /* Configure file object support. */
     WDF_FILEOBJECT_CONFIG_INIT(&fileConfig,
-                               VcomCompEvtFileCreate,
-                               VcomCompEvtFileClose,
+                               GcomCompEvtFileCreate,
+                               GcomCompEvtFileClose,
                                WDF_NO_EVENT_CALLBACK);
 
     WDF_OBJECT_ATTRIBUTES fileAttributes;
-    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&fileAttributes, VCOM_FILE_CTX);
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&fileAttributes, GCOM_FILE_CTX);
     WdfDeviceInitSetFileObjectConfig(deviceInit, &fileConfig, &fileAttributes);
 
     /* ── Create the device ──────────────────────────────────── */
 
-    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, VCOM_PORT_DEVICE_CTX);
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, GCOM_PORT_DEVICE_CTX);
 
     status = WdfDeviceCreate(&deviceInit, &attributes, &compDevice);
     if (!NT_SUCCESS(status)) {
@@ -130,7 +130,7 @@ VcomCompanionCreate(
     }
 
     /* Store port pair reference. */
-    PVCOM_PORT_DEVICE_CTX portDevCtx = VcomGetPortDeviceContext(compDevice);
+    PGCOM_PORT_DEVICE_CTX portDevCtx = GcomGetPortDeviceContext(compDevice);
     portDevCtx->PortPair = PortPair;
     portDevCtx->IsComSide = FALSE;
 
@@ -140,9 +140,9 @@ VcomCompanionCreate(
 
     WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&queueConfig,
                                             WdfIoQueueDispatchParallel);
-    queueConfig.EvtIoRead = VcomCompEvtRead;
-    queueConfig.EvtIoWrite = VcomCompEvtWrite;
-    queueConfig.EvtIoDeviceControl = VcomCompEvtIoctl;
+    queueConfig.EvtIoRead = GcomCompEvtRead;
+    queueConfig.EvtIoWrite = GcomCompEvtWrite;
+    queueConfig.EvtIoDeviceControl = GcomCompEvtIoctl;
 
     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
     attributes.ParentObject = compDevice;
@@ -181,15 +181,15 @@ VcomCompanionCreate(
         return status;
     }
 
-    /* ── Create symbolic link: \DosDevices\VCOMCompanion<N> ──── */
+    /* ── Create symbolic link: \DosDevices\GCOM<N> ──── */
 
     WCHAR symLinkBuf[64];
     RtlStringCbPrintfW(symLinkBuf, sizeof(symLinkBuf),
-                       L"\\DosDevices\\VCOMCompanion%lu",
+                       L"\\DosDevices\\GCOM%lu",
                        PortPair->CompanionIndex);
 
     PortPair->CompSymLink.Buffer = (PWCHAR)ExAllocatePool2(
-        POOL_FLAG_NON_PAGED, sizeof(symLinkBuf), VCOM_POOL_TAG);
+        POOL_FLAG_NON_PAGED, sizeof(symLinkBuf), GCOM_POOL_TAG);
     if (!PortPair->CompSymLink.Buffer) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -199,9 +199,9 @@ VcomCompanionCreate(
 
     status = WdfDeviceCreateSymbolicLink(compDevice, &PortPair->CompSymLink);
     if (!NT_SUCCESS(status)) {
-        TraceEvents(0, 0, "VCOMCompanion%lu symlink create failed: 0x%08X",
+        TraceEvents(0, 0, "GCOM%lu symlink create failed: 0x%08X",
                     PortPair->CompanionIndex, status);
-        ExFreePoolWithTag(PortPair->CompSymLink.Buffer, VCOM_POOL_TAG);
+        ExFreePoolWithTag(PortPair->CompSymLink.Buffer, GCOM_POOL_TAG);
         PortPair->CompSymLink.Buffer = NULL;
         return status;
     }
@@ -210,7 +210,7 @@ VcomCompanionCreate(
 
     WdfControlFinishInitializing(compDevice);
 
-    TraceEvents(0, 0, "Companion device created: VCOMCompanion%lu",
+    TraceEvents(0, 0, "Companion device created: GCOM%lu",
                 PortPair->CompanionIndex);
 
     return STATUS_SUCCESS;
@@ -220,12 +220,12 @@ VcomCompanionCreate(
 /* ── Companion device destruction ─────────────────────────────── */
 
 VOID
-VcomCompanionDestroy(
-    _In_ PVCOM_PORT_PAIR PortPair
+GcomCompanionDestroy(
+    _In_ PGCOM_PORT_PAIR PortPair
 )
 {
     if (PortPair->CompSymLink.Buffer) {
-        ExFreePoolWithTag(PortPair->CompSymLink.Buffer, VCOM_POOL_TAG);
+        ExFreePoolWithTag(PortPair->CompSymLink.Buffer, GCOM_POOL_TAG);
         PortPair->CompSymLink.Buffer = NULL;
     }
 
@@ -239,7 +239,7 @@ VcomCompanionDestroy(
 /* ── Companion-side Read ──────────────────────────────────────── */
 
 VOID
-VcomCompEvtRead(
+GcomCompEvtRead(
     _In_ WDFQUEUE   Queue,
     _In_ WDFREQUEST Request,
     _In_ size_t     Length
@@ -248,8 +248,8 @@ VcomCompEvtRead(
     UNREFERENCED_PARAMETER(Queue);
 
     WDFFILEOBJECT fileObj = WdfRequestGetFileObject(Request);
-    PVCOM_FILE_CTX fileCtx = VcomGetFileContext(fileObj);
-    PVCOM_PORT_PAIR pp = fileCtx->PortPair;
+    PGCOM_FILE_CTX fileCtx = GcomGetFileContext(fileObj);
+    PGCOM_PORT_PAIR pp = fileCtx->PortPair;
 
     if (!pp || !pp->Active) {
         WdfRequestComplete(Request, STATUS_DEVICE_NOT_CONNECTED);
@@ -265,7 +265,7 @@ VcomCompEvtRead(
         return;
     }
 
-    ULONG bytesRead = VcomRingRead(&pp->ComToCompanion,
+    ULONG bytesRead = GcomRingRead(&pp->ComToCompanion,
                                     (PUCHAR)outputBuf,
                                     (ULONG)min(outputLen, Length));
 
@@ -274,7 +274,7 @@ VcomCompEvtRead(
 
         /* Unblock any pending COM-side writes. */
         if (pp->ComWriteQueue) {
-            VcomDrainWritesToRing(&pp->ComToCompanion,
+            GcomDrainWritesToRing(&pp->ComToCompanion,
                                   pp->ComWriteQueue,
                                   pp->CompReadQueue);
         }
@@ -291,7 +291,7 @@ VcomCompEvtRead(
 /* ── Companion-side Write ─────────────────────────────────────── */
 
 VOID
-VcomCompEvtWrite(
+GcomCompEvtWrite(
     _In_ WDFQUEUE   Queue,
     _In_ WDFREQUEST Request,
     _In_ size_t     Length
@@ -300,8 +300,8 @@ VcomCompEvtWrite(
     UNREFERENCED_PARAMETER(Queue);
 
     WDFFILEOBJECT fileObj = WdfRequestGetFileObject(Request);
-    PVCOM_FILE_CTX fileCtx = VcomGetFileContext(fileObj);
-    PVCOM_PORT_PAIR pp = fileCtx->PortPair;
+    PGCOM_FILE_CTX fileCtx = GcomGetFileContext(fileObj);
+    PGCOM_PORT_PAIR pp = fileCtx->PortPair;
 
     if (!pp || !pp->Active) {
         WdfRequestComplete(Request, STATUS_DEVICE_NOT_CONNECTED);
@@ -316,7 +316,7 @@ VcomCompEvtWrite(
         return;
     }
 
-    ULONG bytesWritten = VcomRingWrite(&pp->CompanionToCom,
+    ULONG bytesWritten = GcomRingWrite(&pp->CompanionToCom,
                                         (const PUCHAR)inputBuf,
                                         (ULONG)min(inputLen, Length));
 
@@ -325,11 +325,11 @@ VcomCompEvtWrite(
 
         /* Wake up pending COM-side reads. */
         if (pp->ComReadQueue) {
-            VcomDrainRingToReads(&pp->CompanionToCom, pp->ComReadQueue);
+            GcomDrainRingToReads(&pp->CompanionToCom, pp->ComReadQueue);
         }
 
         /* Notify WaitCommEvent (EV_RXCHAR) on the COM side. */
-        VcomCheckWaitMask(pp, SERIAL_EV_RXCHAR);
+        GcomCheckWaitMask(pp, SERIAL_EV_RXCHAR);
     } else {
         /* Ring buffer full — pend the write. */
         st = WdfRequestForwardToIoQueue(Request, pp->CompWriteQueue);
@@ -343,7 +343,7 @@ VcomCompEvtWrite(
 /* ── Companion-side IOCTL handler ─────────────────────────────── */
 
 VOID
-VcomCompEvtIoctl(
+GcomCompEvtIoctl(
     _In_ WDFQUEUE   Queue,
     _In_ WDFREQUEST Request,
     _In_ size_t     OutputBufferLength,
@@ -356,8 +356,8 @@ VcomCompEvtIoctl(
     UNREFERENCED_PARAMETER(InputBufferLength);
 
     WDFFILEOBJECT fileObj = WdfRequestGetFileObject(Request);
-    PVCOM_FILE_CTX fileCtx = VcomGetFileContext(fileObj);
-    PVCOM_PORT_PAIR pp = fileCtx->PortPair;
+    PGCOM_FILE_CTX fileCtx = GcomGetFileContext(fileObj);
+    PGCOM_PORT_PAIR pp = fileCtx->PortPair;
 
     if (!pp || !pp->Active) {
         WdfRequestComplete(Request, STATUS_DEVICE_NOT_CONNECTED);
@@ -370,11 +370,11 @@ VcomCompEvtIoctl(
 
     /* ── Wait for signal change (overlapped / inverted call) ── */
 
-    case IOCTL_VCOM_WAIT_SIGNAL_CHANGE:
+    case IOCTL_GCOM_WAIT_SIGNAL_CHANGE:
     {
         /*
          * Pend this request in the signal wait queue. It will be
-         * completed by VcomSignalChanged() when the COM side
+         * completed by GcomSignalChanged() when the COM side
          * changes any configuration.
          *
          * The user-mode addon issues this overlapped and blocks
@@ -391,11 +391,11 @@ VcomCompEvtIoctl(
 
     /* ── Get current signal state ─────────────────────────── */
 
-    case IOCTL_VCOM_GET_SIGNALS:
+    case IOCTL_GCOM_GET_SIGNALS:
     {
-        PVCOM_SIGNAL_STATE output;
+        PGCOM_SIGNAL_STATE output;
         status = WdfRequestRetrieveOutputBuffer(
-            Request, sizeof(VCOM_SIGNAL_STATE),
+            Request, sizeof(GCOM_SIGNAL_STATE),
             (PVOID*)&output, NULL
         );
         if (NT_SUCCESS(status)) {
@@ -403,7 +403,7 @@ VcomCompEvtIoctl(
             *output = pp->SignalState;
             WdfSpinLockRelease(pp->SignalLock);
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
-                                              sizeof(VCOM_SIGNAL_STATE));
+                                              sizeof(GCOM_SIGNAL_STATE));
         } else {
             WdfRequestComplete(Request, status);
         }
@@ -412,11 +412,11 @@ VcomCompEvtIoctl(
 
     /* ── Set companion output signals ─────────────────────── */
 
-    case IOCTL_VCOM_SET_SIGNALS:
+    case IOCTL_GCOM_SET_SIGNALS:
     {
-        PVCOM_SET_SIGNALS input;
+        PGCOM_SET_SIGNALS input;
         status = WdfRequestRetrieveInputBuffer(
-            Request, sizeof(VCOM_SET_SIGNALS),
+            Request, sizeof(GCOM_SET_SIGNALS),
             (PVOID*)&input, NULL
         );
         if (NT_SUCCESS(status)) {
@@ -436,7 +436,7 @@ VcomCompEvtIoctl(
             if (pp->CompRts != oldRts) events |= SERIAL_EV_CTS;
             if (pp->CompDtr != oldDtr) events |= SERIAL_EV_DSR | SERIAL_EV_RLSD;
             if (events) {
-                VcomCheckWaitMask(pp, events);
+                GcomCheckWaitMask(pp, events);
             }
 
             WdfRequestComplete(Request, STATUS_SUCCESS);
