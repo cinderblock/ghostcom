@@ -195,3 +195,50 @@ pub fn get_driver_version() -> Result<Option<String>> {
         Err(_) => Ok(None),
     }
 }
+
+/// Check that the driver's IOCTL protocol version is compatible
+/// with this addon. Returns an error message if incompatible,
+/// or null if compatible.
+#[napi]
+pub fn check_driver_compatibility() -> Result<Option<String>> {
+    let handle = match open_device_sync(CONTROL_DEVICE_PATH) {
+        Ok(h) => h,
+        Err(_) => return Ok(Some("Driver not installed".to_string())),
+    };
+
+    let mut version = GcomVersionInfo::default();
+
+    let result = unsafe {
+        device_ioctl(
+            handle,
+            IOCTL_GCOM_GET_VERSION,
+            std::ptr::null(),
+            0,
+            &mut version as *mut _ as *mut u8,
+            mem::size_of::<GcomVersionInfo>() as u32,
+        )
+    };
+
+    unsafe { let _ = CloseHandle(handle); }
+
+    match result {
+        Ok(_) => {
+            if version.protocol_major != GCOM_PROTOCOL_VERSION_MAJOR {
+                Ok(Some(format!(
+                    "Driver protocol version {}.{} is incompatible with addon protocol version {}.{}. \
+                     Please update the {} to match.",
+                    version.protocol_major, version.protocol_minor,
+                    GCOM_PROTOCOL_VERSION_MAJOR, GCOM_PROTOCOL_VERSION_MINOR,
+                    if version.protocol_major < GCOM_PROTOCOL_VERSION_MAJOR {
+                        "driver"
+                    } else {
+                        "addon (npm package)"
+                    }
+                )))
+            } else {
+                Ok(None) // Compatible
+            }
+        }
+        Err(_) => Ok(Some("Failed to query driver version".to_string())),
+    }
+}

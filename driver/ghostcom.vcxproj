@@ -87,6 +87,9 @@
     <ClInclude Include="src\ioctls.h" />
     <ClInclude Include="src\ringbuf.h" />
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="src\ghostcom.rc" />
+  </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

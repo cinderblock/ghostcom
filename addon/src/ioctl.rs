@@ -95,6 +95,11 @@ pub struct GcomListPortsHeader {
     pub count: u32,
 }
 
+/// Expected IOCTL protocol version. If the driver's protocol major
+/// version differs from this, the addon should refuse to operate.
+pub const GCOM_PROTOCOL_VERSION_MAJOR: u16 = 1;
+pub const GCOM_PROTOCOL_VERSION_MINOR: u16 = 0;
+
 /// Driver version response.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -102,6 +107,8 @@ pub struct GcomVersionInfo {
     pub major: u16,
     pub minor: u16,
     pub patch: u16,
+    pub protocol_major: u16,
+    pub protocol_minor: u16,
     pub _reserved: u16,
 }
 

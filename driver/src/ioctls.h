@@ -91,11 +91,22 @@ typedef struct _GCOM_LIST_PORTS_HEADER {
     ULONG Count;
 } GCOM_LIST_PORTS_HEADER, *PGCOM_LIST_PORTS_HEADER;
 
-/* Driver version info. */
+/*
+ * Driver version info + protocol version.
+ *
+ * The protocol version allows the addon to verify it is compatible
+ * with the driver's IOCTL interface. If the major protocol version
+ * differs, the addon should refuse to operate.
+ */
+#define GCOM_PROTOCOL_VERSION_MAJOR 1
+#define GCOM_PROTOCOL_VERSION_MINOR 0
+
 typedef struct _GCOM_VERSION_INFO {
-    USHORT Major;
-    USHORT Minor;
-    USHORT Patch;
+    USHORT Major;             /* Driver version major */
+    USHORT Minor;             /* Driver version minor */
+    USHORT Patch;             /* Driver version patch */
+    USHORT ProtocolMajor;     /* IOCTL protocol major version */
+    USHORT ProtocolMinor;     /* IOCTL protocol minor version */
     USHORT Reserved;
 } GCOM_VERSION_INFO, *PGCOM_VERSION_INFO;
 

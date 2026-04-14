@@ -297,6 +297,8 @@ GcomHandleGetVersion(
     output->Major = GCOM_VERSION_MAJOR;
     output->Minor = GCOM_VERSION_MINOR;
     output->Patch = GCOM_VERSION_PATCH;
+    output->ProtocolMajor = GCOM_PROTOCOL_VERSION_MAJOR;
+    output->ProtocolMinor = GCOM_PROTOCOL_VERSION_MINOR;
     output->Reserved = 0;
 
     WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
