@@ -141,19 +141,27 @@ pub fn open_device_overlapped(path: &str) -> napi::Result<HANDLE> {
     Ok(handle)
 }
 
-/// Open a device by path for synchronous (non-overlapped) I/O.
+/// Open a device by path for synchronous (non-overlapped) I/O with read+write.
 pub fn open_device_sync(path: &str) -> napi::Result<HANDLE> {
+    open_device_sync_access(path, 0xC0000000) // GENERIC_READ | GENERIC_WRITE
+}
+
+/// Open a device by path for synchronous read-only I/O.
+pub fn open_device_sync_read(path: &str) -> napi::Result<HANDLE> {
+    open_device_sync_access(path, 0x80000000) // GENERIC_READ
+}
+
+/// Open a device with specified access flags.
+fn open_device_sync_access(path: &str, access: u32) -> napi::Result<HANDLE> {
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
-    use windows::Win32::Foundation::GENERIC_READ;
-    const GENERIC_WRITE: u32 = 0x40000000;
 
     let wide_path: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
     let handle = unsafe {
         CreateFileW(
             windows::core::PCWSTR(wide_path.as_ptr()),
-            GENERIC_READ.0 | GENERIC_WRITE,
+            access,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             None,
             OPEN_EXISTING,

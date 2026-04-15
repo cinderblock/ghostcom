@@ -11,7 +11,7 @@ use windows::Win32::Foundation::CloseHandle;
 
 use crate::error;
 use crate::ioctl::*;
-use crate::overlapped::{device_ioctl, open_device_sync};
+use crate::overlapped::{device_ioctl, open_device_sync, open_device_sync_read};
 
 /// Path to the driver's control device.
 const CONTROL_DEVICE_PATH: &str = "\\\\.\\GCOMControl";
@@ -98,7 +98,7 @@ pub fn destroy_port(companion_index: u32) -> Result<()> {
 /// Sends IOCTL_GCOM_LIST_PORTS to the control device.
 #[napi]
 pub fn list_ports() -> Result<Vec<PortInfoJs>> {
-    let handle = open_device_sync(CONTROL_DEVICE_PATH)
+    let handle = open_device_sync_read(CONTROL_DEVICE_PATH)
         .map_err(|_| error::driver_not_found())?;
 
     // Allocate enough space for the header + up to 64 port entries.
@@ -152,7 +152,7 @@ pub fn list_ports() -> Result<Vec<PortInfoJs>> {
 /// Check whether the GCOM driver is installed and accessible.
 #[napi]
 pub fn is_driver_available() -> bool {
-    match open_device_sync(CONTROL_DEVICE_PATH) {
+    match open_device_sync_read(CONTROL_DEVICE_PATH) {
         Ok(handle) => {
             unsafe { let _ = CloseHandle(handle); }
             true
@@ -167,7 +167,7 @@ pub fn is_driver_available() -> bool {
 /// is not available.
 #[napi]
 pub fn get_driver_version() -> Result<Option<String>> {
-    let handle = match open_device_sync(CONTROL_DEVICE_PATH) {
+    let handle = match open_device_sync_read(CONTROL_DEVICE_PATH) {
         Ok(h) => h,
         Err(_) => return Ok(None),
     };
@@ -201,7 +201,7 @@ pub fn get_driver_version() -> Result<Option<String>> {
 /// or null if compatible.
 #[napi]
 pub fn check_driver_compatibility() -> Result<Option<String>> {
-    let handle = match open_device_sync(CONTROL_DEVICE_PATH) {
+    let handle = match open_device_sync_read(CONTROL_DEVICE_PATH) {
         Ok(h) => h,
         Err(_) => return Ok(Some("Driver not installed".to_string())),
     };
