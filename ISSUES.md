@@ -8,7 +8,7 @@
 
 ## Driver Lifecycle
 
-- [ ] **Companion index auto-increments forever**: The companion index counter (`NextCompanionIndex`) never resets, even when ports are destroyed and recreated. Port 10 could have companion index 47. Should either reuse freed indices or match the COM port number.
+- [ ] **GCOM number doesn't match COM number**: Creating COM10 results in GCOM0 (or whatever the next auto-increment is). The companion device name should match: COM10 → GCOM10. The `NextCompanionIndex` counter auto-increments and never resets or reuses indices.
 
 - [ ] **`sc stop` returns error 1052**: By design for PnP kernel drivers — `sc stop` doesn't work. Must use `devcon remove` instead. Should document this clearly and provide a helper command/script.
 
