@@ -152,6 +152,14 @@ GcomComPortCreate(
         return status;
     }
 
+    /* Clear DO_EXCLUSIVE — see companion.c for explanation. */
+    {
+        PDEVICE_OBJECT wdmDevice = WdfDeviceWdmGetDeviceObject(comDevice);
+        if (wdmDevice) {
+            wdmDevice->Flags &= ~DO_EXCLUSIVE;
+        }
+    }
+
     /* Store port pair reference in the device context. */
     PGCOM_PORT_DEVICE_CTX portDevCtx = GcomGetPortDeviceContext(comDevice);
     portDevCtx->PortPair = PortPair;

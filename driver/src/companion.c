@@ -150,6 +150,21 @@ GcomCompanionCreate(
         return status;
     }
 
+    /*
+     * Clear the DO_EXCLUSIVE flag from the underlying WDM device object.
+     * WdfDeviceInitSetExclusive(FALSE) doesn't reliably work for control
+     * devices — the I/O manager still rejects CreateFile with
+     * STATUS_SHARING_VIOLATION. Clearing the flag directly fixes this.
+     */
+    {
+        PDEVICE_OBJECT wdmDevice = WdfDeviceWdmGetDeviceObject(compDevice);
+        if (wdmDevice) {
+            wdmDevice->Flags &= ~DO_EXCLUSIVE;
+            TraceEvents(0, 0, "GCOM%lu: cleared DO_EXCLUSIVE from WDM device",
+                        PortPair->CompanionIndex);
+        }
+    }
+
     /* Store port pair reference. */
     PGCOM_PORT_DEVICE_CTX portDevCtx = GcomGetPortDeviceContext(compDevice);
     portDevCtx->PortPair = PortPair;

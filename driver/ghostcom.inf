@@ -16,7 +16,7 @@ Class       = System
 ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider    = %ManufacturerName%
 CatalogFile = ghostcom.cat
-DriverVer   = 04/14/2026,0.2.0.0
+DriverVer   = 04/15/2026,0.3.0.0
 PnpLockdown = 1
 
 [DestinationDirs]
