@@ -32,12 +32,20 @@ GcomComEvtFileCreate(
     PGCOM_PORT_DEVICE_CTX devCtx = GcomGetPortDeviceContext(Device);
     PGCOM_PORT_PAIR pp = devCtx->PortPair;
 
+    if (!pp || !pp->Active) {
+        WdfRequestComplete(Request, STATUS_DEVICE_NOT_CONNECTED);
+        return;
+    }
+
     /* Enforce exclusive access — only one COM-side open at a time. */
     if (InterlockedCompareExchange(&pp->ComSideOpen, 1, 0) != 0) {
         TraceEvents(0, 0, "COM%lu: rejected (already open)", pp->PortNumber);
         WdfRequestComplete(Request, STATUS_SHARING_VIOLATION);
         return;
     }
+
+    /* Take a reference for this file handle. */
+    GcomPortPairAddRef(pp);
 
     /* Set up the file context so I/O handlers can find the port pair. */
     PGCOM_FILE_CTX fileCtx = GcomGetFileContext(FileObject);
@@ -60,11 +68,22 @@ GcomComEvtFileClose(
     PGCOM_FILE_CTX fileCtx = GcomGetFileContext(FileObject);
     PGCOM_PORT_PAIR pp = fileCtx->PortPair;
 
-    if (pp) {
-        InterlockedExchange(&pp->ComSideOpen, 0);
-        GcomSignalChanged(pp, GCOM_CHANGED_COM_CLOSE);
-        TraceEvents(0, 0, "COM%lu closed", pp->PortNumber);
+    if (!pp) {
+        return;
     }
+
+    InterlockedExchange(&pp->ComSideOpen, 0);
+    TraceEvents(0, 0, "COM%lu closed", pp->PortNumber);
+
+    /*
+     * Do NOT call GcomSignalChanged here. WDF calls EvtFileClose
+     * asynchronously — it can fire after GcomPortPairDestroy has
+     * already deleted SignalLock and SignalWaitQueue. Just clear
+     * the open flag and release the reference.
+     */
+
+    /* Drop the reference taken in FileCreate. */
+    GcomPortPairRelease(pp);
 }
 
 

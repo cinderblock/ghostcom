@@ -279,6 +279,7 @@ GcomPortPairDestroy(
 {
     TraceEvents(0, 0, "Port pair destroy starting: COM%lu", PortPair->PortNumber);
 
+    /* Mark inactive so I/O callbacks bail out early. */
     InterlockedExchange(&PortPair->Active, FALSE);
 
     /* Remove from the port table (idempotent — may already be removed). */
@@ -292,9 +293,20 @@ GcomPortPairDestroy(
     }
     WdfWaitLockRelease(DevCtx->PortTableLock);
 
-    /* Free ring buffers first (safe — data only, no WDF handles). */
-    GcomRingFree(&PortPair->ComToCompanion);
-    GcomRingFree(&PortPair->CompanionToCom);
+    /*
+     * NULL out queue handles under SignalLock BEFORE deleting devices.
+     * This prevents GcomSignalChanged / GcomCheckWaitMask from using
+     * stale queue handles if they're running concurrently on another CPU.
+     */
+    WdfSpinLockAcquire(PortPair->SignalLock);
+    PortPair->SignalWaitQueue = NULL;
+    PortPair->WaitMaskQueue = NULL;
+    WdfSpinLockRelease(PortPair->SignalLock);
+
+    PortPair->ComReadQueue = NULL;
+    PortPair->ComWriteQueue = NULL;
+    PortPair->CompReadQueue = NULL;
+    PortPair->CompWriteQueue = NULL;
 
     /*
      * Delete the COM port and companion WDFDEVICE objects.
@@ -304,8 +316,9 @@ GcomPortPairDestroy(
      * - Deletes all child objects (queues, timers, etc.)
      * - Removes symbolic links created with WdfDeviceCreateSymbolicLink
      *
-     * We must NOT touch any queue handles after this point —
-     * they are children of the device and are already freed.
+     * We delete devices BEFORE freeing ring buffers so that all
+     * in-flight I/O callbacks (on parallel-dispatch queues) are
+     * drained before the ring buffer memory is freed.
      *
      * Do NOT call WdfIoQueuePurgeSynchronously separately;
      * that can race with WdfObjectDelete and cause WDF_VIOLATION.
@@ -316,14 +329,9 @@ GcomPortPairDestroy(
     TraceEvents(0, 0, "Deleting companion device for COM%lu", PortPair->PortNumber);
     GcomCompanionDestroy(PortPair);
 
-    /* NULL out all queue handles since they were destroyed with their
-     * parent devices above. */
-    PortPair->ComReadQueue = NULL;
-    PortPair->ComWriteQueue = NULL;
-    PortPair->WaitMaskQueue = NULL;
-    PortPair->CompReadQueue = NULL;
-    PortPair->CompWriteQueue = NULL;
-    PortPair->SignalWaitQueue = NULL;
+    /* Now safe to free ring buffers — no I/O callbacks can be running. */
+    GcomRingFree(&PortPair->ComToCompanion);
+    GcomRingFree(&PortPair->CompanionToCom);
 
     /* Delete WDF lock objects (created without a parent device). */
     if (PortPair->DataLock) {
@@ -335,9 +343,11 @@ GcomPortPairDestroy(
         PortPair->SignalLock = NULL;
     }
 
-    TraceEvents(0, 0, "Port pair destroyed: COM%lu", PortPair->PortNumber);
+    TraceEvents(0, 0, "Port pair destroyed: COM%lu — releasing creation ref",
+                PortPair->PortNumber);
 
-    ExFreePoolWithTag(PortPair, GCOM_POOL_TAG);
+    /* Drop the creation reference. The struct is freed when RefCount hits 0. */
+    GcomPortPairRelease(PortPair);
 }
 
 
@@ -349,10 +359,14 @@ GcomSignalChanged(
     _In_ ULONG ChangedBits
 )
 {
+    if (!PortPair->Active) {
+        return;
+    }
+
     /*
      * Increment the sequence number and set the changed bits.
-     * Then complete any pending WAIT_SIGNAL_CHANGE requests on the
-     * companion side.
+     * Snapshot the queue handle under lock so the destroy path
+     * can safely NULL it before deleting the device.
      */
     WdfSpinLockAcquire(PortPair->SignalLock);
 
@@ -360,14 +374,15 @@ GcomSignalChanged(
     PortPair->SignalState.ChangedMask |= ChangedBits;
 
     GCOM_SIGNAL_STATE snapshot = PortPair->SignalState;
+    WDFQUEUE signalQueue = PortPair->SignalWaitQueue;
 
     WdfSpinLockRelease(PortPair->SignalLock);
 
     /* Complete all pending signal wait IRPs. */
-    if (PortPair->SignalWaitQueue) {
+    if (signalQueue) {
         WDFREQUEST waitReq;
         while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(
-                PortPair->SignalWaitQueue, &waitReq)))
+                signalQueue, &waitReq)))
         {
             PGCOM_SIGNAL_STATE output;
             size_t outputLen;
@@ -425,7 +440,11 @@ GcomDrainRingToReads(
             WdfRequestCompleteWithInformation(readReq, STATUS_SUCCESS, bytesRead);
         } else {
             /* No data — re-queue the request. */
-            WdfRequestForwardToIoQueue(readReq, ReadQueue);
+            NTSTATUS fwdSt = WdfRequestForwardToIoQueue(readReq, ReadQueue);
+            if (!NT_SUCCESS(fwdSt)) {
+                TraceEvents(0, 0, "DrainRingToReads: forward failed 0x%08X", fwdSt);
+                WdfRequestComplete(readReq, fwdSt);
+            }
             break;
         }
     }
@@ -468,7 +487,11 @@ GcomDrainWritesToRing(
             }
         } else {
             /* Ring still full — re-queue. */
-            WdfRequestForwardToIoQueue(writeReq, WriteQueue);
+            NTSTATUS fwdSt = WdfRequestForwardToIoQueue(writeReq, WriteQueue);
+            if (!NT_SUCCESS(fwdSt)) {
+                TraceEvents(0, 0, "DrainWritesToRing: forward failed 0x%08X", fwdSt);
+                WdfRequestComplete(writeReq, fwdSt);
+            }
             break;
         }
     }
@@ -483,20 +506,31 @@ GcomCheckWaitMask(
     _In_ ULONG Events
 )
 {
+    if (!PortPair->Active) {
+        return;
+    }
+
     /*
      * If the COM side has a pending WaitCommEvent (IOCTL_SERIAL_WAIT_ON_MASK)
      * and the event bits match the wait mask, complete the request.
+     *
+     * Snapshot the queue handle under SignalLock so the destroy path
+     * can safely NULL it before deleting the device.
      */
+    WdfSpinLockAcquire(PortPair->SignalLock);
     ULONG waitMask = PortPair->SignalState.WaitMask;
+    WDFQUEUE waitQueue = PortPair->WaitMaskQueue;
+    WdfSpinLockRelease(PortPair->SignalLock);
+
     ULONG matchedEvents = Events & waitMask;
 
-    if (matchedEvents == 0 || !PortPair->WaitMaskQueue) {
+    if (matchedEvents == 0 || !waitQueue) {
         return;
     }
 
     WDFREQUEST waitReq;
     while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(
-            PortPair->WaitMaskQueue, &waitReq)))
+            waitQueue, &waitReq)))
     {
         PULONG output;
         size_t outputLen;
@@ -510,5 +544,32 @@ GcomCheckWaitMask(
         } else {
             WdfRequestComplete(waitReq, st);
         }
+    }
+}
+
+
+/* ── Reference counting ──────────────────────────────────────── */
+
+VOID
+GcomPortPairAddRef(
+    _In_ PGCOM_PORT_PAIR PortPair
+)
+{
+    LONG newCount = InterlockedIncrement(&PortPair->RefCount);
+    TraceEvents(0, 0, "COM%lu: AddRef → %ld", PortPair->PortNumber, newCount);
+}
+
+VOID
+GcomPortPairRelease(
+    _In_ PGCOM_PORT_PAIR PortPair
+)
+{
+    LONG newCount = InterlockedDecrement(&PortPair->RefCount);
+    TraceEvents(0, 0, "COM%lu: Release → %ld", PortPair->PortNumber, newCount);
+
+    if (newCount == 0) {
+        TraceEvents(0, 0, "COM%lu: RefCount hit 0, freeing port pair",
+                    PortPair->PortNumber);
+        ExFreePoolWithTag(PortPair, GCOM_POOL_TAG);
     }
 }

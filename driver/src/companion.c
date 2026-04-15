@@ -34,6 +34,11 @@ GcomCompEvtFileCreate(
     PGCOM_PORT_DEVICE_CTX devCtx = GcomGetPortDeviceContext(Device);
     PGCOM_PORT_PAIR pp = devCtx->PortPair;
 
+    if (!pp || !pp->Active) {
+        WdfRequestComplete(Request, STATUS_DEVICE_NOT_CONNECTED);
+        return;
+    }
+
     /* Only allow one companion connection at a time. */
     if (InterlockedCompareExchange(&pp->CompanionSideOpen, 1, 0) != 0) {
         TraceEvents(0, 0, "GCOM%lu: rejected (already open)",
@@ -41,6 +46,9 @@ GcomCompEvtFileCreate(
         WdfRequestComplete(Request, STATUS_SHARING_VIOLATION);
         return;
     }
+
+    /* Take a reference for this file handle. */
+    GcomPortPairAddRef(pp);
 
     /* Set up the file context. */
     PGCOM_FILE_CTX fileCtx = GcomGetFileContext(FileObject);
@@ -60,10 +68,22 @@ GcomCompEvtFileClose(
     PGCOM_FILE_CTX fileCtx = GcomGetFileContext(FileObject);
     PGCOM_PORT_PAIR pp = fileCtx->PortPair;
 
-    if (pp) {
+    if (!pp) {
+        return;
+    }
+
+    /*
+     * Only touch pp fields if the port pair is still active.
+     * WDF calls EvtFileClose asynchronously — it can fire after
+     * GcomPortPairDestroy has already torn down the port pair.
+     */
+    if (pp->Active) {
         InterlockedExchange(&pp->CompanionSideOpen, 0);
         TraceEvents(0, 0, "GCOM%lu closed", pp->CompanionIndex);
     }
+
+    /* Drop the reference taken in FileCreate. */
+    GcomPortPairRelease(pp);
 }
 
 
@@ -431,12 +451,15 @@ GcomCompEvtIoctl(
             (PVOID*)&input, NULL
         );
         if (NT_SUCCESS(status)) {
+            BOOLEAN newDtr = input->DtrState ? TRUE : FALSE;
+            BOOLEAN newRts = input->RtsState ? TRUE : FALSE;
+
             WdfSpinLockAcquire(pp->SignalLock);
             BOOLEAN oldDtr = pp->CompDtr;
             BOOLEAN oldRts = pp->CompRts;
 
-            pp->CompDtr = input->DtrState ? TRUE : FALSE;
-            pp->CompRts = input->RtsState ? TRUE : FALSE;
+            pp->CompDtr = newDtr;
+            pp->CompRts = newRts;
             WdfSpinLockRelease(pp->SignalLock);
 
             /*
@@ -444,10 +467,13 @@ GcomCompEvtIoctl(
              * WaitCommEvent. Through null-modem crossover:
              *   Companion DTR → COM sees DSR + DCD
              *   Companion RTS → COM sees CTS
+             *
+             * Compare using local variables captured under the lock,
+             * not by re-reading pp->CompDtr/CompRts which could race.
              */
             ULONG events = 0;
-            if (pp->CompRts != oldRts) events |= SERIAL_EV_CTS;
-            if (pp->CompDtr != oldDtr) events |= SERIAL_EV_DSR | SERIAL_EV_RLSD;
+            if (newRts != oldRts) events |= SERIAL_EV_CTS;
+            if (newDtr != oldDtr) events |= SERIAL_EV_DSR | SERIAL_EV_RLSD;
             if (events) {
                 GcomCheckWaitMask(pp, events);
             }

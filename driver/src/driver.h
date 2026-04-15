@@ -251,6 +251,15 @@ VOID GcomPortPairDestroy(
     _In_ PGCOM_PORT_PAIR PortPair
 );
 
+/* Reference counting for safe teardown. */
+VOID GcomPortPairAddRef(
+    _In_ PGCOM_PORT_PAIR PortPair
+);
+
+VOID GcomPortPairRelease(
+    _In_ PGCOM_PORT_PAIR PortPair
+);
+
 /* Find an unused COM port number. */
 ULONG GcomFindFreePortNumber(
     _In_ PGCOM_DEVICE_CTX DevCtx
