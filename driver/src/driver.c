@@ -103,6 +103,20 @@ GcomEvtSelfManagedIoCleanup(
         InterlockedExchange(&toDestroy[i]->Active, FALSE);
         GcomPortPairDestroy(devCtx, toDestroy[i]);
     }
+
+    /*
+     * Destroy the control device so the driver can fully unload.
+     *
+     * WDF control devices are parented to the WDFDRIVER, not the FDO,
+     * so they survive FDO removal. If we don't delete them here, the
+     * driver image stays loaded and can't be updated without a reboot.
+     */
+    if (devCtx->ControlDevice) {
+        TraceEvents(0, 0, "Destroying control device");
+        GcomControlDeviceInvalidate();
+        WdfObjectDelete(devCtx->ControlDevice);
+        devCtx->ControlDevice = NULL;
+    }
 }
 
 

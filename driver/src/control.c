@@ -26,6 +26,12 @@ static const WCHAR ControlSymLinkBuf[] = L"\\DosDevices\\GCOMControl";
  */
 static PGCOM_DEVICE_CTX g_DevCtx = NULL;
 
+/* Called during cleanup to prevent stale pointer use. */
+VOID GcomControlDeviceInvalidate(VOID)
+{
+    g_DevCtx = NULL;
+}
+
 
 /* ── Create the control device ────────────────────────────────── */
 
@@ -325,6 +331,11 @@ GcomControlIoDeviceControl(
     UNREFERENCED_PARAMETER(InputBufferLength);
 
     PGCOM_DEVICE_CTX devCtx = g_DevCtx;
+
+    if (!devCtx) {
+        WdfRequestComplete(Request, STATUS_DEVICE_NOT_CONNECTED);
+        return;
+    }
 
     switch (IoControlCode) {
     case IOCTL_GCOM_CREATE_PORT:

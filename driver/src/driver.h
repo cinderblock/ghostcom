@@ -185,6 +185,8 @@ NTSTATUS GcomControlDeviceCreate(
     _In_ PGCOM_DEVICE_CTX DevCtx
 );
 
+VOID GcomControlDeviceInvalidate(VOID);
+
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL GcomControlIoDeviceControl;
 
 /* ── Function prototypes: comport.c ───────────────────────────── */
