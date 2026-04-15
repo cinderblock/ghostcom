@@ -50,7 +50,7 @@ GcomControlDeviceCreate(
      */
     controlInit = WdfControlDeviceInitAllocate(
         WdfDeviceGetDriver(ParentDevice),
-        &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_R_RES_R  /* Admins RWX, users read-only */
+        &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R  /* Admins RWX, users RW */
     );
     if (!controlInit) {
         return STATUS_INSUFFICIENT_RESOURCES;
