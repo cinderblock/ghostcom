@@ -18,7 +18,7 @@ use napi::threadsafe_function::{
 
 use crate::error::SendHandle;
 use crate::ioctl::*;
-use crate::overlapped::{device_ioctl_overlapped, OverlappedEvent};
+use crate::overlapped::{cancel_io, device_ioctl_overlapped, OverlappedEvent};
 
 /// Raw signal state object passed to JavaScript.
 ///
@@ -76,6 +76,8 @@ impl From<&GcomSignalState> for RawSignalStateJs {
 
 /// Managed signal notification thread.
 pub struct SignalWatcher {
+    /// Handle copy used solely for CancelIoEx on shutdown.
+    handle: SendHandle,
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -88,9 +90,14 @@ impl SignalWatcher {
     ///
     /// `callback` is a ThreadsafeFunction that will be called on the
     /// JS event loop thread whenever a signal changes.
+    ///
+    /// Using `ErrorStrategy::Fatal`: the JS callback receives `(RawSignalState)`
+    /// directly instead of the `(null, RawSignalState)` that `CalleeHandled`
+    /// would produce. With `CalleeHandled` the TypeScript callback's first
+    /// argument would be `null` and the signal state silently discarded.
     pub fn start(
         handle: SendHandle,
-        callback: ThreadsafeFunction<RawSignalStateJs, ErrorStrategy::CalleeHandled>,
+        callback: ThreadsafeFunction<RawSignalStateJs, ErrorStrategy::Fatal>,
     ) -> Self {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
@@ -103,6 +110,7 @@ impl SignalWatcher {
             .expect("failed to spawn signal watcher thread");
 
         Self {
+            handle,
             shutdown,
             thread: Some(thread),
         }
@@ -112,6 +120,11 @@ impl SignalWatcher {
     pub fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
 
+        // Cancel the pending overlapped IOCTL so the thread's
+        // wait_infinite() unblocks immediately. Without this the thread
+        // would block until the next signal change (possibly never).
+        let _ = cancel_io(self.handle.raw());
+
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -120,7 +133,7 @@ impl SignalWatcher {
     /// The thread's main loop.
     fn thread_main(
         handle: SendHandle,
-        callback: ThreadsafeFunction<RawSignalStateJs, ErrorStrategy::CalleeHandled>,
+        callback: ThreadsafeFunction<RawSignalStateJs, ErrorStrategy::Fatal>,
         shutdown: Arc<AtomicBool>,
     ) {
         let mut overlapped = match OverlappedEvent::new() {
@@ -176,7 +189,8 @@ impl SignalWatcher {
                 Ok(bytes) => {
                     if bytes as usize >= mem::size_of::<GcomSignalState>() {
                         let js_state = RawSignalStateJs::from(&signal_state);
-                        callback.call(Ok(js_state), ThreadsafeFunctionCallMode::NonBlocking);
+                        // ErrorStrategy::Fatal: call takes value directly.
+                        callback.call(js_state, ThreadsafeFunctionCallMode::NonBlocking);
                     }
                 }
                 Err(_) => {

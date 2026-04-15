@@ -135,7 +135,13 @@ GcomPortPairCreate(
         }
     }
 
-    ULONG companionIndex = (ULONG)InterlockedIncrement(&DevCtx->NextCompanionIndex) - 1;
+    /*
+     * Use portNumber as the companion index so that COM<N> is always
+     * paired with GCOM<N>. The auto-incrementing NextCompanionIndex
+     * caused GCOM0 to be created for COM10, making the companion device
+     * name confusing and inconsistent with the port number.
+     */
+    ULONG companionIndex = portNumber;
 
     /*
      * Reserve the slot with a sentinel before releasing the lock.

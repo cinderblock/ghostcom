@@ -16,8 +16,8 @@
     "addon/"
   ],
   "scripts": {
-    "build:addon": "napi build --manifest-path addon/Cargo.toml --release -o addon",
-    "build:addon:debug": "napi build --manifest-path addon/Cargo.toml -o addon",
+    "build:addon": "napi build --manifest-path addon/Cargo.toml --release -o addon && powershell -Command \"if (Test-Path addon/ghostcom.win32-x64-msvc.node) { Copy-Item addon/ghostcom.win32-x64-msvc.node addon/ghostcom.node -Force }\"",
+    "build:addon:debug": "napi build --manifest-path addon/Cargo.toml -o addon && powershell -Command \"if (Test-Path addon/ghostcom.win32-x64-msvc.node) { Copy-Item addon/ghostcom.win32-x64-msvc.node addon/ghostcom.node -Force }\"",
     "build:ts": "tsc",
     "build": "bun run build:addon && bun run build:ts",
     "build:driver": "powershell -ExecutionPolicy Bypass -File scripts/build-driver.ps1",
@@ -43,6 +43,7 @@
   "devDependencies": {
     "@napi-rs/cli": "^3.0.0",
     "@types/node": "^22.0.0",
+    "serialport": "^12.0.0",
     "typescript": "^5.7.0"
   },
   "license": "MIT"

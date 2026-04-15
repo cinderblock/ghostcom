@@ -13,8 +13,9 @@ export interface NativeStreamBinding {
 
   /**
    * Register a callback for read-side errors.
+   * Receives an error message string (not an Error object).
    */
-  onReadError(callback: (error: Error) => void): void;
+  onReadError(callback: (message: string) => void): void;
 
   /**
    * Write a buffer to the companion device. The callback is invoked
@@ -76,8 +77,8 @@ export class VirtualPortStream extends Duplex {
       }
     });
 
-    native.onReadError((error: Error) => {
-      this.destroy(error);
+    native.onReadError((message: string) => {
+      this.destroy(new Error(message));
     });
   }
 

@@ -371,12 +371,38 @@ GcomComEvtRead(
 
         WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, bytesRead);
     } else {
-        /* No data available — pend the request. */
-        st = WdfRequestForwardToIoQueue(Request, pp->ComReadQueue);
-        WdfSpinLockRelease(pp->DataLock);
+        /*
+         * Ring is empty. Check the ReadIntervalTimeout setting.
+         *
+         * SERIAL convention (MSDN): when ReadIntervalTimeout == MAXDWORD and
+         * both total-timeout values are 0, the read must return IMMEDIATELY
+         * with however many bytes are available (zero if none).
+         *
+         * Serialport libraries (e.g. node-serialport) use this "non-blocking
+         * drain" pattern after receiving the first byte via ReadFileEx:
+         *   1. ReadFileEx(1 byte) — wait for first byte via APC
+         *   2. SetCommTimeouts(MAXDWORD, 0, 0) then ReadFile — return
+         *      immediately with any additional bytes buffered
+         *
+         * If we were to pend the MAXDWORD read, the caller's thread blocks in
+         * WaitForSingleObject forever, preventing it from issuing another
+         * ReadFileEx for the next message.
+         */
+        if (pp->Timeouts.ReadIntervalTimeout == MAXDWORD &&
+            pp->Timeouts.ReadTotalTimeoutMultiplier == 0 &&
+            pp->Timeouts.ReadTotalTimeoutConstant == 0)
+        {
+            /* "Non-blocking" read: complete immediately with 0 bytes. */
+            WdfSpinLockRelease(pp->DataLock);
+            WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, 0);
+        } else {
+            /* Blocking read — pend until companion writes data. */
+            st = WdfRequestForwardToIoQueue(Request, pp->ComReadQueue);
+            WdfSpinLockRelease(pp->DataLock);
 
-        if (!NT_SUCCESS(st)) {
-            WdfRequestComplete(Request, st);
+            if (!NT_SUCCESS(st)) {
+                WdfRequestComplete(Request, st);
+            }
         }
     }
 }

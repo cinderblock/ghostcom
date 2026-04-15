@@ -1,0 +1,10 @@
+# Use Rust's bundled rust-lld as the MSVC-compatible linker.
+# rust-lld.exe handles `-flavor link` (MSVC mode) natively.
+# The Windows SDK and CRT lib paths come from xwin.
+[target.x86_64-pc-windows-msvc]
+linker = "C:/Users/test/.rustup/toolchains/stable-x86_64-pc-windows-msvc/lib/rustlib/x86_64-pc-windows-msvc/bin/rust-lld.exe"
+rustflags = [
+  "-L", "native=C:/winsdk/sdk/lib/um/x86_64",
+  "-L", "native=C:/winsdk/crt/lib/x86_64",
+  "-L", "native=C:/winsdk/sdk/lib/ucrt/x86_64",
+]

@@ -11,7 +11,7 @@ use std::mem;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, ERROR_IO_PENDING};
-use windows::Win32::System::IO::{DeviceIoControl, GetOverlappedResult};
+use windows::Win32::System::IO::DeviceIoControl;
 
 use crate::error::{self, SendHandle};
 use crate::ioctl::*;
@@ -123,7 +123,13 @@ impl NativePort {
             ));
         }
 
-        let tsfn = callback.create_threadsafe_function(
+        // ErrorStrategy::Fatal: JS callback receives (RawSignalState) directly.
+        // CalleeHandled would produce (null, RawSignalState) and the signal
+        // state would be silently discarded by the TypeScript callback.
+        let tsfn: napi::threadsafe_function::ThreadsafeFunction<
+            RawSignalStateJs,
+            napi::threadsafe_function::ErrorStrategy::Fatal,
+        > = callback.create_threadsafe_function(
             0,
             |ctx: napi::threadsafe_function::ThreadSafeCallContext<RawSignalStateJs>| {
                 Ok(vec![ctx.value])

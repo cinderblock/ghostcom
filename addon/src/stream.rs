@@ -24,6 +24,7 @@ use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{
     ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode,
 };
+use std::sync::Mutex;
 use napi_derive::napi;
 use windows::Win32::Foundation::{ERROR_IO_PENDING, ERROR_OPERATION_ABORTED};
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
@@ -44,8 +45,10 @@ pub struct PortStreamNative {
     paused: Arc<AtomicBool>,
     read_thread: Option<JoinHandle<()>>,
     // Store tsfn references so we can abort them on shutdown.
-    data_tsfn: Option<ThreadsafeFunction<Buffer, ErrorStrategy::CalleeHandled>>,
-    error_tsfn: Option<ThreadsafeFunction<String, ErrorStrategy::CalleeHandled>>,
+    // ErrorStrategy::Fatal: JS callback receives (value) directly, no null error prefix.
+    data_tsfn: Option<ThreadsafeFunction<Buffer, ErrorStrategy::Fatal>>,
+    // Shared with the read thread so it can report errors.
+    error_tsfn: Arc<Mutex<Option<ThreadsafeFunction<String, ErrorStrategy::Fatal>>>>,
 }
 
 impl PortStreamNative {
@@ -57,7 +60,7 @@ impl PortStreamNative {
             paused: Arc::new(AtomicBool::new(false)),
             read_thread: None,
             data_tsfn: None,
-            error_tsfn: None,
+            error_tsfn: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -69,18 +72,22 @@ impl PortStreamNative {
     /// Called once from the TypeScript constructor.
     #[napi]
     pub fn on_data(&mut self, callback: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::CalleeHandled> =
+        // ErrorStrategy::Fatal: JS callback receives (buffer) directly.
+        // With CalleeHandled it would receive (null, buffer) and chunk=null would
+        // call push(null) which signals EOF and permanently closes the readable stream.
+        let tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::Fatal> =
             callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
 
         let handle = self.handle;
         let shutdown = self.shutdown.clone();
         let paused = self.paused.clone();
         let tsfn_clone = tsfn.clone();
+        let error_tsfn = self.error_tsfn.clone();
 
         let read_thread = thread::Builder::new()
             .name("gcom-reader".into())
             .spawn(move || {
-                Self::read_thread_main(handle, tsfn_clone, shutdown, paused);
+                Self::read_thread_main(handle, tsfn_clone, error_tsfn, shutdown, paused);
             })
             .map_err(|e| {
                 napi::Error::new(
@@ -95,26 +102,35 @@ impl PortStreamNative {
     }
 
     /// Register the read error callback.
+    ///
+    /// Must be called before any data arrives (immediately after on_data).
     #[napi]
     pub fn on_read_error(&mut self, callback: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<String, ErrorStrategy::CalleeHandled> =
+        // ErrorStrategy::Fatal: JS callback receives (errorString) directly.
+        let tsfn: ThreadsafeFunction<String, ErrorStrategy::Fatal> =
             callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
-        self.error_tsfn = Some(tsfn);
+        *self.error_tsfn.lock().unwrap() = Some(tsfn);
         Ok(())
     }
 
     /// Write a buffer to the companion device (overlapped I/O).
     ///
-    /// The callback is invoked when the write completes.
+    /// The callback is invoked when the write completes, following Node.js
+    /// convention: callback(null) on success, callback(Error) on failure.
     #[napi]
     pub fn write(&self, chunk: Buffer, callback: JsFunction) -> Result<()> {
         let handle = self.handle;
         let data: Vec<u8> = chunk.to_vec();
 
-        let tsfn: ThreadsafeFunction<Option<String>, ErrorStrategy::CalleeHandled> =
-            callback.create_threadsafe_function(0, |ctx| {
-                Ok(vec![ctx.value])
-            })?;
+        // Use CalleeHandled so the JS callback receives (null) on success
+        // and (Error) on failure — exactly the Node.js stream _write convention.
+        // ctx.value is (), which converts to JS `undefined`; the write callback
+        // ignores the second arg, so (null, undefined) == (null) in practice.
+        let tsfn: ThreadsafeFunction<(), ErrorStrategy::CalleeHandled> =
+            callback.create_threadsafe_function(
+                0,
+                |ctx: napi::threadsafe_function::ThreadSafeCallContext<()>| Ok(vec![ctx.value]),
+            )?;
 
         // Perform the write on a worker thread to avoid blocking the
         // JS event loop.
@@ -124,11 +140,13 @@ impl PortStreamNative {
                 let result = Self::do_write(handle, &data);
                 match result {
                     Ok(()) => {
-                        tsfn.call(Ok(None), ThreadsafeFunctionCallMode::NonBlocking);
+                        // callback(null) — success
+                        tsfn.call(Ok(()), ThreadsafeFunctionCallMode::NonBlocking);
                     }
                     Err(e) => {
+                        // callback(Error) — failure
                         tsfn.call(
-                            Ok(Some(e.to_string())),
+                            Err(napi::Error::new(napi::Status::GenericFailure, e.to_string())),
                             ThreadsafeFunctionCallMode::NonBlocking,
                         );
                     }
@@ -173,7 +191,7 @@ impl PortStreamNative {
         if let Some(tsfn) = self.data_tsfn.take() {
             tsfn.abort().ok();
         }
-        if let Some(tsfn) = self.error_tsfn.take() {
+        if let Some(tsfn) = self.error_tsfn.lock().unwrap().take() {
             tsfn.abort().ok();
         }
     }
@@ -181,7 +199,8 @@ impl PortStreamNative {
     /// The read thread's main loop.
     fn read_thread_main(
         handle: SendHandle,
-        tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::CalleeHandled>,
+        tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::Fatal>,
+        error_tsfn: Arc<Mutex<Option<ThreadsafeFunction<String, ErrorStrategy::Fatal>>>>,
         shutdown: Arc<AtomicBool>,
         paused: Arc<AtomicBool>,
     ) {
@@ -258,14 +277,21 @@ impl PortStreamNative {
                     if e.code() == ERROR_OPERATION_ABORTED.into() {
                         break;
                     }
-                    eprintln!("ghostcom: read error: {e}");
+                    let msg = format!("ghostcom read error: {e}");
+                    eprintln!("{msg}");
+                    if let Ok(guard) = error_tsfn.lock() {
+                        if let Some(ref etsfn) = *guard {
+                            etsfn.call(msg, ThreadsafeFunctionCallMode::NonBlocking);
+                        }
+                    }
                     break;
                 }
             }
 
             if bytes_read > 0 {
                 let chunk = Buffer::from(&buffer[..bytes_read as usize]);
-                tsfn.call(Ok(chunk), ThreadsafeFunctionCallMode::NonBlocking);
+                // ErrorStrategy::Fatal: call takes value directly (no Ok() wrapper).
+                tsfn.call(chunk, ThreadsafeFunctionCallMode::NonBlocking);
             }
         }
     }
