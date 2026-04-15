@@ -277,6 +277,8 @@ GcomPortPairDestroy(
     _In_ PGCOM_PORT_PAIR PortPair
 )
 {
+    TraceEvents(0, 0, "Port pair destroy starting: COM%lu", PortPair->PortNumber);
+
     InterlockedExchange(&PortPair->Active, FALSE);
 
     /* Remove from the port table (idempotent — may already be removed). */
@@ -290,40 +292,47 @@ GcomPortPairDestroy(
     }
     WdfWaitLockRelease(DevCtx->PortTableLock);
 
-    /* Cancel all pending I/O. */
-    if (PortPair->ComReadQueue) {
-        WdfIoQueuePurgeSynchronously(PortPair->ComReadQueue);
-    }
-    if (PortPair->ComWriteQueue) {
-        WdfIoQueuePurgeSynchronously(PortPair->ComWriteQueue);
-    }
-    if (PortPair->CompReadQueue) {
-        WdfIoQueuePurgeSynchronously(PortPair->CompReadQueue);
-    }
-    if (PortPair->CompWriteQueue) {
-        WdfIoQueuePurgeSynchronously(PortPair->CompWriteQueue);
-    }
-    if (PortPair->SignalWaitQueue) {
-        WdfIoQueuePurgeSynchronously(PortPair->SignalWaitQueue);
-    }
-    if (PortPair->WaitMaskQueue) {
-        WdfIoQueuePurgeSynchronously(PortPair->WaitMaskQueue);
-    }
-
-    /* Free ring buffers. */
+    /* Free ring buffers first (safe — data only, no WDF handles). */
     GcomRingFree(&PortPair->ComToCompanion);
     GcomRingFree(&PortPair->CompanionToCom);
 
-    /* Delete symbolic links and devices. */
+    /*
+     * Delete the COM port and companion WDFDEVICE objects.
+     *
+     * WdfObjectDelete on a device automatically:
+     * - Cancels and completes all pending I/O on all queues
+     * - Deletes all child objects (queues, timers, etc.)
+     * - Removes symbolic links created with WdfDeviceCreateSymbolicLink
+     *
+     * We must NOT touch any queue handles after this point —
+     * they are children of the device and are already freed.
+     *
+     * Do NOT call WdfIoQueuePurgeSynchronously separately;
+     * that can race with WdfObjectDelete and cause WDF_VIOLATION.
+     */
+    TraceEvents(0, 0, "Deleting COM device for COM%lu", PortPair->PortNumber);
     GcomComPortDestroy(PortPair);
+
+    TraceEvents(0, 0, "Deleting companion device for COM%lu", PortPair->PortNumber);
     GcomCompanionDestroy(PortPair);
 
-    /* Delete WDF lock objects (they have no automatic parent). */
+    /* NULL out all queue handles since they were destroyed with their
+     * parent devices above. */
+    PortPair->ComReadQueue = NULL;
+    PortPair->ComWriteQueue = NULL;
+    PortPair->WaitMaskQueue = NULL;
+    PortPair->CompReadQueue = NULL;
+    PortPair->CompWriteQueue = NULL;
+    PortPair->SignalWaitQueue = NULL;
+
+    /* Delete WDF lock objects (created without a parent device). */
     if (PortPair->DataLock) {
         WdfObjectDelete(PortPair->DataLock);
+        PortPair->DataLock = NULL;
     }
     if (PortPair->SignalLock) {
         WdfObjectDelete(PortPair->SignalLock);
+        PortPair->SignalLock = NULL;
     }
 
     TraceEvents(0, 0, "Port pair destroyed: COM%lu", PortPair->PortNumber);
