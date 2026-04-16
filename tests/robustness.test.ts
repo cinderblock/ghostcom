@@ -51,6 +51,11 @@ function mkOv(hEvent: unknown): Buffer {
 function openCom(port: number): unknown {
   return CreateFileW(enc16(`\\\\.\\COM${port}`), 0xC0000000, 3, null, 3, 0x40000000, null);
 }
+const INVALID_HANDLE = 0xFFFFFFFFFFFFFFFFn;
+function isValidHandle(h: unknown): boolean {
+  const v = BigInt((h as any).valueOf?.() ?? h);
+  return v !== 0n && v !== INVALID_HANDLE;
+}
 
 interface NativeStream {
   onData(cb: (c: Buffer) => void): void;
@@ -101,5 +106,35 @@ describe("GhostCOM — driver robustness", () => {
     }
     await sleep(200);
     expect(native.listPorts().length).toBe(baseline);
+  });
+
+  it("closing COM handle without destroying port allows reopen", async () => {
+    if (!addonAvailable) { console.log(SKIP_MSG); return; }
+    const { portNumber, companionIndex } = native.createPort(0);
+    const port = native.openPort(companionIndex);
+    const stream = port.createStream();
+    stream.onData(() => {});
+    stream.onReadError(() => {});
+    stream.resumeReading();
+    port.onSignalChange(() => {});
+    await sleep(200);
+
+    // First open/close cycle on the COM side.
+    const h1 = openCom(portNumber);
+    expect(isValidHandle(h1)).toBe(true);
+    CloseHandle(h1);
+    await sleep(100);
+
+    // Second open should succeed — driver must re-arm after the first close.
+    const h2 = openCom(portNumber);
+    expect(isValidHandle(h2)).toBe(true);
+    CloseHandle(h2);
+    await sleep(100);
+
+    stream.shutdown();
+    port.shutdownSignals();
+    port.close();
+    await sleep(100);
+    native.destroyPort(companionIndex);
   });
 });
