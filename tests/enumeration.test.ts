@@ -113,4 +113,12 @@ describe("GhostCOM — Windows PnP enumeration (expected failures until PDO rewr
     `);
     expect(r.stdout).toMatch(new RegExp(`\\(COM${portNumber}\\)`));
   });
+
+  it("[System.IO.Ports.SerialPort]::GetPortNames() includes our COM port", () => {
+    if (!addonAvailable) { console.log(SKIP_MSG); return; }
+    const r = ps(`
+      [System.IO.Ports.SerialPort]::GetPortNames() -join "\`n"
+    `);
+    expect(r.stdout.split(/\r?\n/)).toContain(`COM${portNumber}`);
+  });
 });
