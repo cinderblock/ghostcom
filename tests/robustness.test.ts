@@ -260,4 +260,34 @@ describe("GhostCOM — driver robustness", () => {
     const still = native.listPorts().find(p => p.companionIndex === companionIndex);
     expect(still).toBeUndefined();
   });
+
+  it("second openPort on same companion index fails with a clean error", async () => {
+    if (!addonAvailable) { console.log(SKIP_MSG); return; }
+    const { companionIndex } = native.createPort(0);
+    const port1 = native.openPort(companionIndex);
+    await sleep(100);
+
+    // Second open while the first is still held should error, not BSOD
+    // and not silently return a second handle to the same device.
+    let err: Error | null = null;
+    let port2: NativePort | null = null;
+    try {
+      port2 = native.openPort(companionIndex);
+    } catch (e) {
+      err = e as Error;
+    }
+
+    // Accept either: (a) openPort threw, or (b) returned a second handle
+    // but the underlying driver rejected it. (a) is the clean outcome we
+    // want; log if (b) happens so we notice.
+    if (!err) {
+      console.warn("openPort did NOT reject second open — driver may be allowing dup opens");
+    }
+    expect(err).not.toBeNull();
+
+    try { port2?.close?.(); } catch {}
+    port1.close();
+    await sleep(100);
+    native.destroyPort(companionIndex);
+  });
 });
