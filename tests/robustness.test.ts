@@ -216,4 +216,48 @@ describe("GhostCOM — driver robustness", () => {
     await sleep(100);
     native.destroyPort(companionIndex);
   }, 15_000);
+
+  it("destroyPort with live COM handle does not crash or leak", async () => {
+    if (!addonAvailable) { console.log(SKIP_MSG); return; }
+    const { portNumber, companionIndex } = native.createPort(0);
+    const port = native.openPort(companionIndex);
+    const stream = port.createStream();
+    stream.onData(() => {});
+    stream.onReadError(() => {});
+    stream.resumeReading();
+    port.onSignalChange(() => {});
+    await sleep(200);
+
+    const hCom = openCom(portNumber);
+    expect(isValidHandle(hCom)).toBe(true);
+
+    // Post a pending read so the driver has in-flight I/O.
+    const hEvt = CreateEventW(null, true, false, null);
+    const ov = mkOv(hEvt);
+    const rbuf = Buffer.alloc(64);
+    ReadFile(hCom, rbuf, rbuf.length, null, ov);
+    await sleep(100);
+
+    // Tear down the addon side first …
+    stream.shutdown();
+    port.shutdownSignals();
+    port.close();
+    await sleep(50);
+
+    // … then destroy the port while the COM handle is still open with a
+    // pended read.  The driver must cancel the IRP cleanly and not BSOD.
+    native.destroyPort(companionIndex);
+    await sleep(300);
+
+    // Pending read should have completed (with ERROR_OPERATION_ABORTED or
+    // similar) — wait briefly so we don't leak the event.
+    WaitForSingleObject(hEvt, 500);
+
+    CloseHandle(hEvt);
+    CloseHandle(hCom);
+
+    // Port must be gone from listPorts().
+    const still = native.listPorts().find(p => p.companionIndex === companionIndex);
+    expect(still).toBeUndefined();
+  });
 });
