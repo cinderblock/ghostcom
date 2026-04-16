@@ -30,10 +30,15 @@ if (existsSync(RESULTS_DIR)) {
   mkdirSync(RESULTS_DIR, { recursive: true });
 }
 
+function sleepMs(ms: number) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
 function runCleanup() {
   console.log("── cleanup ports ──");
   const r = spawnSync("bun", ["run", "tests/cleanup.js"], { stdio: "inherit", shell: true });
   if (r.status !== 0) console.warn(`cleanup exit=${r.status}`);
+  // Driver Verifier slows teardown — allow destroyed ports to fully
+  // deregister before the next test file tries to create new ones.
+  sleepMs(3000);
 }
 
 let totalFailed = 0;
@@ -49,6 +54,8 @@ for (const file of TESTS) {
     [
       "test",
       file,
+      "--bail",
+      "--timeout", "30000",
       "--reporter=junit",
       `--reporter-outfile=${outFile}`,
     ],

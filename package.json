@@ -26,6 +26,7 @@
     "test": "bun run scripts/run-tests.ts",
     "test:report": "bun run scripts/run-tests.ts; bun run scripts/generate-allure-report.ts",
     "report": "bun run scripts/generate-allure-report.ts",
+    "report:publish": "bun run scripts/publish-allure-history.ts",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist addon/target addon/*.node"
   },

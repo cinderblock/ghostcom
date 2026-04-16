@@ -36,7 +36,12 @@ Desktop.ini
 driver/ghostcom/
 driver/src_driver_pp.i
 
-# Allure — raw results and generated HTML are regenerable; only the
-# history/trend data under allure-history/ is committed for persistence.
+# Allure — raw results and generated HTML are regenerable; trend data
+# under allure-history/ is persisted on the `allure-history` orphan
+# branch (via scripts/publish-allure-history.ts). The worktree for that
+# branch lives in .allure-history-wt/.
 allure-results/
 allure-report/
+allure-history/
+.allure-history-wt/
+.allure-history-init-*/

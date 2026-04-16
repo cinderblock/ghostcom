@@ -18,6 +18,10 @@ const ROOT = path.resolve(".");
 const RESULTS_DIR = path.join(ROOT, "allure-results");
 const REPORT_DIR  = path.join(ROOT, "allure-report");
 const HISTORY_DIR = path.join(ROOT, "allure-history");
+// Orphan-branch worktree (see scripts/publish-allure-history.ts) — when
+// present, history is sourced from (and written back to) there so the
+// trend persists across clean checkouts via the `allure-history` branch.
+const HISTORY_WT  = path.join(ROOT, ".allure-history-wt");
 
 // 0. Ensure JAVA_HOME is set. Allure needs Java 8+. Auto-detect the
 //    portable Temurin JRE under %USERPROFILE%\.jre (which is where
@@ -55,13 +59,21 @@ if (!existsSync(RESULTS_DIR)) {
   process.exit(2);
 }
 
-// 1. Restore committed history so `allure generate` produces a trend chart.
-if (existsSync(HISTORY_DIR)) {
+// 1. Restore committed history so `allure generate` produces a trend
+//    chart. Prefer the orphan-branch worktree when checked out; fall
+//    back to a local allure-history/ directory.
+const histSource = existsSync(HISTORY_WT) ? HISTORY_WT
+                 : existsSync(HISTORY_DIR) ? HISTORY_DIR
+                 : null;
+if (histSource) {
   const dst = path.join(RESULTS_DIR, "history");
   if (existsSync(dst)) rmSync(dst, { recursive: true, force: true });
   mkdirSync(dst, { recursive: true });
-  cpSync(HISTORY_DIR, dst, { recursive: true });
-  console.log(`restored history from ${HISTORY_DIR} → ${dst}`);
+  for (const f of readdirSync(histSource)) {
+    if (f === ".git") continue; // don't ingest worktree metadata
+    cpSync(path.join(histSource, f), path.join(dst, f), { recursive: true });
+  }
+  console.log(`restored history from ${histSource} → ${dst}`);
 } else {
   console.log("no prior history found — this run starts a fresh trend");
 }
@@ -82,13 +94,26 @@ if (r.status !== 0) {
   process.exit(r.status ?? 1);
 }
 
-// 3. Persist the updated history for the next run.
+// 3. Persist the updated history for the next run. Write to both the
+//    orphan-branch worktree (if present) and the plain allure-history/
+//    directory — the publish script pushes whichever is populated.
 const src = path.join(REPORT_DIR, "history");
 if (existsSync(src)) {
-  if (existsSync(HISTORY_DIR)) rmSync(HISTORY_DIR, { recursive: true, force: true });
-  mkdirSync(HISTORY_DIR, { recursive: true });
-  cpSync(src, HISTORY_DIR, { recursive: true });
-  console.log(`persisted history to ${HISTORY_DIR}`);
+  for (const dst of [HISTORY_WT, HISTORY_DIR]) {
+    if (dst === HISTORY_WT && !existsSync(HISTORY_WT)) continue;
+    if (existsSync(dst)) {
+      for (const f of readdirSync(dst)) {
+        if (f === ".git") continue;
+        rmSync(path.join(dst, f), { recursive: true, force: true });
+      }
+    } else {
+      mkdirSync(dst, { recursive: true });
+    }
+    for (const f of readdirSync(src)) {
+      cpSync(path.join(src, f), path.join(dst, f), { recursive: true });
+    }
+    console.log(`persisted history to ${dst}`);
+  }
 }
 
 console.log(`\nreport: file:///${REPORT_DIR.replace(/\\/g, "/")}/index.html`);
