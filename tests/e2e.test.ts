@@ -447,3 +447,7 @@ describe("GhostCOM — full end-to-end bidirectional", () => {
     expect(compTotal.equals(payload)).toBe(true);
   }, 30_000);
 });
+
+// Additional COM API compatibility tests are in compat.test.ts (separate file
+// so each test suite runs in an isolated process and doesn't share port state).
+

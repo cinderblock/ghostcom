@@ -105,6 +105,15 @@
   direct FFI call works. The `serialport` library also uses sharing flags and opens
   successfully.
 
+## Bun Test Runner
+
+- [ ] **Parallel test execution conflicts**: `bun test tests/` runs both test files
+  in parallel worker processes. Both test suites interact with the same driver
+  (same COM port namespace), so parallel execution causes port conflicts and test
+  hangs. Run them sequentially: `bun run test` (the package.json script handles
+  cleanup and sequencing). Individual files still work: `bun test tests/e2e.test.ts`
+  and `bun test tests/compat.test.ts`.
+
 ## Signal Path
 
 - [x] **Signal change notifications**: Verified end-to-end. `IOCTL_GCOM_WAIT_SIGNAL_CHANGE`,

@@ -23,7 +23,7 @@
     "build:driver": "powershell -ExecutionPolicy Bypass -File scripts/build-driver.ps1",
     "install:driver": "powershell -ExecutionPolicy Bypass -File scripts/install-driver.ps1",
     "uninstall:driver": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-driver.ps1",
-    "test": "bun test",
+    "test": "bun run tests/cleanup.js && bun test tests/e2e.test.ts && bun run tests/cleanup.js && bun test tests/compat.test.ts",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist addon/target addon/*.node"
   },
