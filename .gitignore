@@ -35,3 +35,8 @@ Desktop.ini
 .env.*
 driver/ghostcom/
 driver/src_driver_pp.i
+
+# Allure — raw results and generated HTML are regenerable; only the
+# history/trend data under allure-history/ is committed for persistence.
+allure-results/
+allure-report/
