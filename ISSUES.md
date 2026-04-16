@@ -66,15 +66,17 @@
   GCOM0 (auto-incremented companion index). Fixed: `portpair.c` now uses
   `portNumber` as the companion index, so COM10 ↔ GCOM10.
 
-- [ ] **Stale symlink after crash**: If the driver process is killed without a clean
+- [x] **Stale symlink after crash**: If the driver process is killed without a clean
   `destroyPort()`, the `\DosDevices\COM<N>` symlink persists in the kernel object
   namespace even though the underlying device is gone. Subsequent `createPort(N)`
-  calls fail with `STATUS_OBJECT_NAME_COLLISION`. Workaround: use a different port
-  number, or restart the GhostCOM driver service.
+  calls fail with `STATUS_OBJECT_NAME_COLLISION`.
 
-  **Fix**: in `GcomPortPairCreate`, when a specific `RequestedPortNumber` is given,
-  check whether the DOS symlink already exists before proceeding (the same check
-  `GcomFindFreePortNumber` already does for auto-assigned ports).
+  **Fixed** in `driver/src/portpair.c`: `GcomPortPairCreate()` now checks whether
+  `\DosDevices\COM<N>` exists (via `ZwOpenSymbolicLinkObject`) before proceeding
+  with a specific port number request. Returns `STATUS_OBJECT_NAME_COLLISION` early
+  if the stale symlink is found, with a clear error path for the caller.
+
+  **Note**: fix is in source; requires driver rebuild to take effect.
 
 - [ ] **`sc stop` returns error 1052**: By design for PnP kernel drivers — `sc stop`
   doesn't work. Must use `devcon remove` instead. Should document this clearly and
@@ -130,8 +132,8 @@
 
 ## Write Path
 
-- [ ] **Partial writes silently truncate data**: `GcomRingWrite` can write fewer
-  bytes than requested (when the ring is nearly full). The driver returns
+- [x] **Partial writes silently truncated data**: `GcomRingWrite` can write fewer
+  bytes than requested (when the ring is nearly full). The driver returned
   `STATUS_SUCCESS` with `bytesWritten < inputLen`. The Rust `do_write` function
   does not check whether all bytes were written; it returns `Ok(())` on the first
   successful `WriteFile` regardless of byte count. For payloads larger than
@@ -140,8 +142,8 @@
 
   **Impact**: writing exactly `GCOM_RING_BUFFER_SIZE` (64 KB) loses 1 byte.
 
-  **Fix**: in `do_write`, check `bytes_written < data.len()` after the WriteFile
-  completes and retry with the remaining slice.
+  **Fixed**: `do_write` now loops, retrying with the remaining slice after each
+  partial write, with a 1ms sleep when 0 bytes are accepted (ring full).
 
 ## Security
 
