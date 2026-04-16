@@ -121,4 +121,14 @@ describe("GhostCOM — Windows PnP enumeration (expected failures until PDO rewr
     `);
     expect(r.stdout.split(/\r?\n/)).toContain(`COM${portNumber}`);
   });
+
+  it("new System.IO.Ports.SerialPort('COM<N>').Open() succeeds", () => {
+    if (!addonAvailable) { console.log(SKIP_MSG); return; }
+    const r = ps(`
+      $sp = New-Object System.IO.Ports.SerialPort "COM${portNumber}",9600,None,8,One
+      try { $sp.Open(); "OPENED"; $sp.Close() }
+      catch { "FAILED: $($_.Exception.Message)" }
+    `);
+    expect(r.stdout).toBe("OPENED");
+  });
 });
