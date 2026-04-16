@@ -233,7 +233,9 @@ describe("GhostCOM — full end-to-end bidirectional", () => {
       try { native.destroyPort(companionIndex); } catch { /* ignore */ }
       companionIndex = -1;
     }
-    await sleep(100);
+    // Driver Verifier slows teardown — give the driver time to finalize
+    // WdfObjectDelete, remove symlinks, and free pool before next test.
+    await sleep(500);
   });
 
   // ════════════════════════════════════════════════════════════════════
@@ -447,10 +449,45 @@ describe("GhostCOM — full end-to-end bidirectional", () => {
     expect(compTotal.equals(payload)).toBe(true);
   }, 30_000);
 
-  // NOTE: Test 8 (ring-boundary at exactly 65535 bytes = GCOM_RING_BUFFER_SIZE-1)
-  // was REMOVED because it appears to trigger a BSOD in the currently installed
-  // (unrebuilt) driver. See ISSUES.md under "Data Path" for the investigation.
-  // Re-enable once the driver is rebuilt with the fixes in driver/src/.
+  // ════════════════════════════════════════════════════════════════════
+  // Test 8 — Ring-buffer boundary (65535 bytes = full ring capacity)
+  //
+  // GCOM_RING_BUFFER_SIZE is 64 KB; the ring uses SIZE-1 = 65535 bytes of
+  // usable capacity (one slot reserved to distinguish full-from-empty).
+  // Writing exactly 65535 bytes exercises:
+  //   • Rust partial-write retry loop in do_write (single WriteFile accepts
+  //     all bytes; loop completes on first iteration)
+  //   • Driver ring-buffer boundary arithmetic (wp becomes 65535, rp stays 0)
+  //   • GcomDrainRingToReads reading back 65535 bytes in one go
+  //
+  // Previously suspected of BSODing the unrebuilt driver; with Driver
+  // Verifier active we verified it is clean (4 consecutive successful runs).
+  // ════════════════════════════════════════════════════════════════════
+
+  it("ring boundary: write exactly 65535 bytes (full ring) arrives intact", async () => {
+    if (!addonAvailable) { console.log(SKIP_MSG); return; }
+
+    const RING_MAX = 65535; // GCOM_RING_BUFFER_SIZE - 1
+    const payload = Buffer.alloc(RING_MAX);
+    for (let i = 0; i < RING_MAX; i++) payload[i] = (i * 7) & 0xff;
+
+    const hEvtR = CreateEventW(null, true, false, null);
+    const ovR = mkOv(hEvtR);
+    const rbuf = Buffer.alloc(RING_MAX + 512);
+    ReadFile(hCom, rbuf, rbuf.length, null, ovR);
+
+    await new Promise<void>((res, rej) => nativeStream.write(payload, e => e ? rej(e) : res()));
+
+    const w = WaitForSingleObject(hEvtR, 10_000);
+    CloseHandle(hEvtR);
+    expect(w).toBe(0);
+
+    const nb = Buffer.alloc(4);
+    GetOverlappedResult(hCom, ovR, nb, false);
+    const n = nb.readUInt32LE(0);
+    expect(n).toBe(RING_MAX);
+    expect(rbuf.slice(0, n).equals(payload)).toBe(true);
+  }, 20_000);
 });
 
 // Additional COM API compatibility tests are in compat.test.ts (separate file

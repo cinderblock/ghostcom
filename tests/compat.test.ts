@@ -104,7 +104,7 @@ const SERIAL_DCD_STATE = 0x80; // DCD bit
 
 interface RawSignal { sequenceNumber: number; changedMask: number; baudRate: number; dtrState: boolean; rtsState: boolean; }
 interface NativeStream { onData(cb: (c: Buffer) => void): void; onReadError(cb: (m: string) => void): void; resumeReading(): void; write(b: Buffer, cb: (e?: Error | null) => void): void; shutdown(): void; }
-interface NativePort { createStream(): NativeStream; onSignalChange(cb: (r: RawSignal) => void): void; setSignals(d: boolean, r: boolean): void; shutdownSignals(): void; close(): void; }
+interface NativePort { createStream(): NativeStream; onSignalChange(cb: (r: RawSignal) => void): void; getSignals(): RawSignal; setSignals(d: boolean, r: boolean): void; shutdownSignals(): void; close(): void; }
 interface NativeAddon { createPort(n: number): { portNumber: number; companionIndex: number }; openPort(ci: number): NativePort; destroyPort(ci: number): void; listPorts(): Array<{ portNumber: number; companionIndex: number }>; }
 
 function sleep(ms: number) { return new Promise<void>(r => setTimeout(r, ms)); }
@@ -162,7 +162,8 @@ describe("GhostCOM — COM-side API compatibility", () => {
       try { native.destroyPort(companionIndex); } catch {}
       companionIndex = -1;
     }
-    await sleep(100);
+    // Driver Verifier slows teardown; give the driver time to finalize.
+    await sleep(500);
   });
 
   // ════════════════════════════════════════════════════════════════════════
