@@ -80,13 +80,25 @@ function readOverlapped(hCom: unknown, size: number, timeoutMs: number): Buffer 
 // ── Serial IOCTL codes (ntddser.h, FILE_DEVICE_SERIAL_PORT=0x1b) ─────────────
 // CTL_CODE(DevType, Fn, Method=0, Access=0) = (DevType<<16)|(Fn<<2)|0
 const ctlCode = (fn: number) => (0x1b << 16) | (fn << 2);
-const IOCTL_SET_WAIT_MASK = ctlCode(7);  // IOCTL_SERIAL_SET_WAIT_MASK
-const IOCTL_WAIT_ON_MASK  = ctlCode(8);  // IOCTL_SERIAL_WAIT_ON_MASK
+const IOCTL_SET_WAIT_MASK  = ctlCode(7);   // IOCTL_SERIAL_SET_WAIT_MASK
+const IOCTL_WAIT_ON_MASK   = ctlCode(8);   // IOCTL_SERIAL_WAIT_ON_MASK
+const IOCTL_SET_BAUD_RATE  = ctlCode(1);   // IOCTL_SERIAL_SET_BAUD_RATE
+const IOCTL_GET_BAUD_RATE  = ctlCode(2);   // IOCTL_SERIAL_GET_BAUD_RATE
+const IOCTL_SET_LINE_CTRL  = ctlCode(3);   // IOCTL_SERIAL_SET_LINE_CONTROL
+const IOCTL_GET_LINE_CTRL  = ctlCode(4);   // IOCTL_SERIAL_GET_LINE_CONTROL
+const IOCTL_PURGE          = ctlCode(19);  // IOCTL_SERIAL_PURGE
+const IOCTL_GET_COMMSTATUS = ctlCode(20);  // IOCTL_SERIAL_GET_COMMSTATUS
+
+// SERIAL_PURGE flags
+const SERIAL_PURGE_TXABORT = 0x0001;
+const SERIAL_PURGE_RXABORT = 0x0002;
+const SERIAL_PURGE_TXCLEAR = 0x0004;
+const SERIAL_PURGE_RXCLEAR = 0x0008;
 
 // Windows modem status bits (WinBase.h)
 const SERIAL_CTS_STATE = 0x10;
 const SERIAL_DSR_STATE = 0x20;
-const SERIAL_DCD_STATE = 0x80; // RI/DCD bit
+const SERIAL_DCD_STATE = 0x80; // DCD bit
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -107,6 +119,8 @@ describe("GhostCOM — COM-side API compatibility", () => {
   let nativeStream: NativeStream;
   let hCom: unknown;
   const companionReceived: Buffer[] = [];
+  // Shared signal log — beforeEach resets it; tests can read it
+  const signals: Array<{ changedMask: number; baudRate: number }> = [];
 
   beforeAll(() => {
     if (!addonAvailable) return;
@@ -128,7 +142,8 @@ describe("GhostCOM — COM-side API compatibility", () => {
     nativeStream.onData(c => { if (c?.length) companionReceived.push(c); });
     nativeStream.onReadError(() => {});
     nativeStream.resumeReading();
-    nativePort.onSignalChange(() => {});
+    signals.length = 0;
+    nativePort.onSignalChange(r => signals.push({ changedMask: r.changedMask, baudRate: r.baudRate }));
     await sleep(100); // let signal watcher issue its first IOCTL
 
     hCom = CreateFileW(enc16(`\\\\.\\COM${portNumber}`), 0xC0000000, 3, null, 3, 0x40000000, null);
@@ -272,5 +287,79 @@ describe("GhostCOM — COM-side API compatibility", () => {
     expect(s2 & SERIAL_CTS_STATE).toBe(0);
     expect(s2 & SERIAL_DSR_STATE).toBe(0);
     expect(s2 & SERIAL_DCD_STATE).toBe(0);
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Test D — SetBaudRate / GetBaudRate  (subset of SetCommState)
+  //
+  // Apps like Arduino IDE, pyserial, and PuTTY call SetCommState which
+  // internally issues IOCTL_SERIAL_SET_BAUD_RATE + SET_LINE_CONTROL.
+  // This test exercises those IOCTLs directly and verifies:
+  //   1. the baud rate is stored in the driver's signal state, and
+  //   2. the companion's signal watcher receives GCOM_CHANGED_BAUD.
+  // ════════════════════════════════════════════════════════════════════════
+
+  it("SetBaudRate/GetBaudRate: baud rate written via IOCTL is stored and readable", async () => {
+    if (!addonAvailable) { console.log(SKIP_MSG); return; }
+
+    const GCOM_CHANGED_BAUD = 0x0001;
+    // signals[] is populated by the beforeEach onSignalChange handler
+    signals.length = 0; // clear any events from port open
+
+    // Issue IOCTL_SERIAL_SET_BAUD_RATE with 115200
+    const setBaud = Buffer.alloc(4);
+    setBaud.writeUInt32LE(115200, 0);
+    const nb1 = Buffer.alloc(4);
+    const setOk = DeviceIoControl(hCom, IOCTL_SET_BAUD_RATE, setBaud, 4, null, 0, nb1, null);
+    expect(setOk).toBe(true);
+
+    // Verify baud rate was stored by reading back from the companion side.
+    // nativePort.getSignals() issues IOCTL_GCOM_GET_SIGNALS on the companion
+    // device (overlapped + wait, using our proven sync_ioctl path), which reads
+    // pp->SignalState.BaudRate — the same field SET_BAUD_RATE writes to.
+    const state = nativePort.getSignals();
+    expect(state.baudRate).toBe(115200);
+
+    // Companion should receive GCOM_CHANGED_BAUD signal via the shared watcher
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      if (signals.some(s => (s.changedMask & GCOM_CHANGED_BAUD) !== 0)) break;
+      await sleep(20);
+    }
+    const baudSignal = signals.find(s => (s.changedMask & GCOM_CHANGED_BAUD) !== 0);
+    expect(baudSignal).toBeDefined();
+    expect(baudSignal?.baudRate).toBe(115200);
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Test E — PurgeComm RXABORT
+  //
+  // Used by apps that need to cancel in-progress reads before starting a
+  // new protocol exchange. RXABORT cancels all IRPs pending in ComReadQueue.
+  // ════════════════════════════════════════════════════════════════════════
+
+  it("PurgeComm RXABORT: cancels a pending overlapped read on the COM port", async () => {
+    if (!addonAvailable) { console.log(SKIP_MSG); return; }
+
+    // 1. Issue an overlapped ReadFile — ring is empty so the IRP pends in ComReadQueue.
+    const hEvt = CreateEventW(null, true, false, null);
+    const ov = mkOv(hEvt);
+    const buf = Buffer.alloc(64);
+    ReadFile(hCom, buf, 64, null, ov);
+    await sleep(50); // let the IRP land in the manual queue
+
+    // 2. RXABORT: driver calls WdfIoQueuePurge(ComReadQueue) →
+    //    the pending IRP is cancelled and its OVERLAPPED event is signaled.
+    const flags = Buffer.alloc(4);
+    flags.writeUInt32LE(SERIAL_PURGE_RXABORT, 0);
+    const purgeOk = DeviceIoControl(hCom, IOCTL_PURGE, flags, 4, null, 0, Buffer.alloc(4), null);
+    expect(purgeOk).toBe(true);
+
+    // 3. The cancelled IRP completes within 500ms — WaitForSingleObject returns 0
+    //    (WAIT_OBJECT_0 = signaled). A return of 258 would mean timeout (IRP not
+    //    cancelled), which would fail the test.
+    const w = WaitForSingleObject(hEvt, 500);
+    CloseHandle(hEvt);
+    expect(w).toBe(0);
   });
 });

@@ -296,31 +296,50 @@ impl PortStreamNative {
         }
     }
 
-    /// Perform a synchronous-overlapped write.
+    /// Perform a synchronous-overlapped write of ALL bytes in `data`.
+    ///
+    /// The driver's ring buffer has `GCOM_RING_BUFFER_SIZE - 1` capacity.
+    /// A single WriteFile may accept fewer bytes than requested when the ring
+    /// is nearly full. This function retries until every byte is written or an
+    /// error occurs, so callers always get a fully-written guarantee.
     fn do_write(handle: SendHandle, data: &[u8]) -> napi::Result<()> {
-        let mut overlapped = OverlappedEvent::new()?;
-        overlapped.reset()?;
+        let mut offset = 0usize;
 
-        let mut bytes_written: u32 = 0;
+        while offset < data.len() {
+            let mut overlapped = OverlappedEvent::new()?;
+            overlapped.reset()?;
 
-        let write_ok = unsafe {
-            WriteFile(
-                handle.raw(),
-                Some(data),
-                Some(&mut bytes_written),
-                Some(overlapped.as_mut_ptr()),
-            )
-        };
+            let remaining = &data[offset..];
+            let mut bytes_written: u32 = 0;
 
-        match write_ok {
-            Ok(()) => Ok(()),
-            Err(e) if e.code() == ERROR_IO_PENDING.into() => {
-                overlapped.wait_infinite()?;
-                overlapped.get_result(handle.raw())?;
-                Ok(())
+            let write_ok = unsafe {
+                WriteFile(
+                    handle.raw(),
+                    Some(remaining),
+                    Some(&mut bytes_written),
+                    Some(overlapped.as_mut_ptr()),
+                )
+            };
+
+            let written = match write_ok {
+                Ok(()) => bytes_written as usize,
+                Err(e) if e.code() == ERROR_IO_PENDING.into() => {
+                    overlapped.wait_infinite()?;
+                    overlapped.get_result(handle.raw())? as usize
+                }
+                Err(e) => return Err(crate::error::win_err("WriteFile", e)),
+            };
+
+            if written == 0 {
+                // Driver accepted 0 bytes — ring full and no progress.
+                // Yield briefly and retry rather than spinning hard.
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            } else {
+                offset += written;
             }
-            Err(e) => Err(crate::error::win_err("WriteFile", e)),
         }
+
+        Ok(())
     }
 }
 

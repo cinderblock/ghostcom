@@ -116,7 +116,7 @@ GcomPortPairCreate(
     /* Determine port number. */
     ULONG portNumber;
     if (RequestedPortNumber != 0) {
-        /* Check if the requested number is already in use. */
+        /* Check if the requested number is already in use by us. */
         for (ULONG i = 0; i < GCOM_MAX_PORTS; i++) {
             if (GCOM_PORT_IS_VALID(DevCtx->Ports[i]) &&
                 DevCtx->Ports[i]->Active &&
@@ -126,6 +126,35 @@ GcomPortPairCreate(
                 return STATUS_OBJECT_NAME_COLLISION;
             }
         }
+
+        /*
+         * Also check whether the \DosDevices\COM<N> symlink already exists
+         * in the object namespace (e.g. from a crashed previous session that
+         * didn't clean up).  GcomFindFreePortNumber does this check for
+         * auto-assigned ports but the explicit-request path didn't, leading
+         * to STATUS_OBJECT_NAME_COLLISION from WdfDeviceCreateSymbolicLink
+         * later with no clear error for the caller.
+         */
+        WCHAR dosName[64];
+        UNICODE_STRING dosNameStr;
+        RtlStringCbPrintfW(dosName, sizeof(dosName),
+                           L"\\DosDevices\\COM%lu", RequestedPortNumber);
+        RtlInitUnicodeString(&dosNameStr, dosName);
+
+        OBJECT_ATTRIBUTES objAttr;
+        InitializeObjectAttributes(&objAttr, &dosNameStr,
+                                   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                   NULL, NULL);
+        HANDLE linkHandle;
+        NTSTATUS st = ZwOpenSymbolicLinkObject(&linkHandle,
+                                               SYMBOLIC_LINK_QUERY, &objAttr);
+        if (NT_SUCCESS(st)) {
+            ZwClose(linkHandle);
+            WdfWaitLockRelease(DevCtx->PortTableLock);
+            /* Stale symlink from a crashed session — caller should retry. */
+            return STATUS_OBJECT_NAME_COLLISION;
+        }
+
         portNumber = RequestedPortNumber;
     } else {
         portNumber = GcomFindFreePortNumber(DevCtx);
