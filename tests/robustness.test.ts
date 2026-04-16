@@ -137,4 +137,83 @@ describe("GhostCOM — driver robustness", () => {
     await sleep(100);
     native.destroyPort(companionIndex);
   });
+
+  it("1000 small writes (10 bytes each) arrive intact and in order", async () => {
+    if (!addonAvailable) { console.log(SKIP_MSG); return; }
+    const { portNumber, companionIndex } = native.createPort(0);
+    const port = native.openPort(companionIndex);
+    const stream = port.createStream();
+    stream.onData(() => {});
+    stream.onReadError(() => {});
+    stream.resumeReading();
+    port.onSignalChange(() => {});
+    await sleep(200);
+
+    const hCom = openCom(portNumber);
+    expect(isValidHandle(hCom)).toBe(true);
+
+    // Reader thread — pulls from COM side while writer pushes from companion.
+    const N_WRITES = 1000;
+    const CHUNK_LEN = 10;
+    const TOTAL = N_WRITES * CHUNK_LEN;
+    const received = Buffer.alloc(TOTAL);
+    let recvOff = 0;
+    const hEvt = CreateEventW(null, true, false, null);
+
+    const readOnce = () => new Promise<number>((resolve) => {
+      const ov = mkOv(hEvt);
+      const remaining = TOTAL - recvOff;
+      const tmp = Buffer.alloc(Math.min(4096, remaining));
+      ReadFile(hCom, tmp, tmp.length, null, ov);
+      (function poll() {
+        const w = WaitForSingleObject(hEvt, 0);
+        if (w === 0) {
+          const nb = Buffer.alloc(4);
+          GetOverlappedResult(hCom, ov, nb, false);
+          const n = nb.readUInt32LE(0);
+          tmp.copy(received, recvOff, 0, n);
+          recvOff += n;
+          resolve(n);
+        } else {
+          setTimeout(poll, 5);
+        }
+      })();
+    });
+
+    // Kick a background drain loop.
+    let draining = true;
+    const drainPromise = (async () => {
+      while (draining && recvOff < TOTAL) {
+        await readOnce();
+      }
+    })();
+
+    // Fire 1000 writes, each 10 bytes, sequentially via companion.
+    const expected = Buffer.alloc(TOTAL);
+    for (let i = 0; i < N_WRITES; i++) {
+      const chunk = Buffer.alloc(CHUNK_LEN);
+      for (let j = 0; j < CHUNK_LEN; j++) chunk[j] = (i * 31 + j * 7) & 0xff;
+      chunk.copy(expected, i * CHUNK_LEN);
+      await new Promise<void>((res, rej) =>
+        stream.write(chunk, (e) => (e ? rej(e) : res())),
+      );
+    }
+
+    // Wait up to 5s for the drain to finish.
+    const deadline = Date.now() + 5000;
+    while (recvOff < TOTAL && Date.now() < deadline) await sleep(20);
+    draining = false;
+    await drainPromise.catch(() => {});
+
+    expect(recvOff).toBe(TOTAL);
+    expect(received.equals(expected)).toBe(true);
+
+    CloseHandle(hEvt);
+    CloseHandle(hCom);
+    stream.shutdown();
+    port.shutdownSignals();
+    port.close();
+    await sleep(100);
+    native.destroyPort(companionIndex);
+  }, 15_000);
 });
