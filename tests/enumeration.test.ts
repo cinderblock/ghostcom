@@ -102,4 +102,15 @@ describe("GhostCOM — Windows PnP enumeration (expected failures until PDO rewr
     `);
     expect(r.stdout.length).toBeGreaterThan(0);
   });
+
+  it("Get-PnpDevice -Class Ports lists our COM port", () => {
+    if (!addonAvailable) { console.log(SKIP_MSG); return; }
+    const r = ps(`
+      Get-PnpDevice -Class Ports -Status OK -ErrorAction SilentlyContinue |
+        Where-Object { $_.FriendlyName -match "\\(COM${portNumber}\\)" } |
+        Select-Object -ExpandProperty FriendlyName |
+        Out-String
+    `);
+    expect(r.stdout).toMatch(new RegExp(`\\(COM${portNumber}\\)`));
+  });
 });
