@@ -131,4 +131,17 @@ describe("GhostCOM — Windows PnP enumeration (expected failures until PDO rewr
     `);
     expect(r.stdout).toBe("OPENED");
   });
+
+  it("Get-CimInstance Win32_PnPEntity GUID_DEVINTERFACE_COMPORT lists our port", () => {
+    if (!addonAvailable) { console.log(SKIP_MSG); return; }
+    // GUID_DEVINTERFACE_COMPORT = {86E0D1E0-8089-11D0-9CE4-08003E301F73}
+    // Appears on any device that has registered the serial-port class interface.
+    const r = ps(`
+      Get-CimInstance -Namespace root\\cimv2 -ClassName Win32_PnPEntity -ErrorAction SilentlyContinue |
+        Where-Object { $_.ClassGuid -eq "{4d36e978-e325-11ce-bfc1-08002be10318}" -and $_.Name -match "\\(COM${portNumber}\\)" } |
+        Select-Object -ExpandProperty Name |
+        Out-String
+    `);
+    expect(r.stdout).toMatch(new RegExp(`\\(COM${portNumber}\\)`));
+  });
 });
