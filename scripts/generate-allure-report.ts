@@ -54,10 +54,17 @@ if (!process.env.JAVA_HOME || !existsSync(process.env.JAVA_HOME)) {
   }
 }
 
+import { convertJunitDir } from "./junit-to-allure.ts";
+
 if (!existsSync(RESULTS_DIR)) {
   console.error(`No results at ${RESULTS_DIR}. Run \`bun run test\` first.`);
   process.exit(2);
 }
+
+// 0b. Convert JUnit XML → Allure JSON (allure generate doesn't consume
+//     JUnit XML natively — it needs its own *-result.json format).
+const converted = convertJunitDir(RESULTS_DIR);
+console.log(`converted ${converted} test cases from JUnit XML → Allure JSON`);
 
 // 1. Restore committed history so `allure generate` produces a trend
 //    chart. Prefer the orphan-branch worktree when checked out; fall
