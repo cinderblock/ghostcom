@@ -95,11 +95,6 @@ describe("GhostCOM — Windows PnP enumeration (expected failures until PDO rewr
     await sleep(500);
   });
 
-  // All enumeration tests are it.todo() — they document what SHOULD work
-  // once the driver is rewritten to enumerate a child PDO in the Ports
-  // class (WdfPdoInitAllocate + GUID_DEVINTERFACE_COMPORT registration).
-  // They'll be converted back to it() after the PDO rewrite + driver rebuild.
-
   it("HKLM\\HARDWARE\\DEVICEMAP\\SERIALCOMM contains our port", () => {
     if (!addonAvailable) { console.log(SKIP_MSG); return; }
     // SERIALCOMM stores: value name = \Device\GCOMSerial<N>, value data = COM<N>
@@ -114,7 +109,7 @@ describe("GhostCOM — Windows PnP enumeration (expected failures until PDO rewr
     expect(r.stdout).toContain("FOUND");
   });
 
-  it.todo("Get-PnpDevice -Class Ports lists our COM port", () => {
+  it("Get-PnpDevice -Class Ports lists our COM port", () => {
     if (!addonAvailable) { console.log(SKIP_MSG); return; }
     const r = ps(`
       Get-PnpDevice -Class Ports -Status OK -ErrorAction SilentlyContinue |
@@ -143,7 +138,7 @@ describe("GhostCOM — Windows PnP enumeration (expected failures until PDO rewr
     expect(r.stdout).toBe("OPENED");
   });
 
-  it.todo("Get-CimInstance Win32_PnPEntity GUID_DEVINTERFACE_COMPORT lists our port", () => {
+  it("Get-CimInstance Win32_PnPEntity GUID_DEVINTERFACE_COMPORT lists our port", () => {
     if (!addonAvailable) { console.log(SKIP_MSG); return; }
     // GUID_DEVINTERFACE_COMPORT = {86E0D1E0-8089-11D0-9CE4-08003E301F73}
     // Appears on any device that has registered the serial-port class interface.
