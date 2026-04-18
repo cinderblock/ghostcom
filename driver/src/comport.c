@@ -13,6 +13,11 @@
 #include "driver.h"
 #include <devguid.h>    /* GUID_DEVCLASS_PORTS */
 
+/* MAXDWORD is a user-mode constant; define it for kernel mode. */
+#ifndef MAXDWORD
+#define MAXDWORD 0xFFFFFFFF
+#endif
+
 /* ── Tracing ──────────────────────────────────────────────────── */
 
 #define TraceEvents(level, flag, msg, ...) \
@@ -128,7 +133,8 @@ GcomComPortCreate(
      * Compatible ID: *PNP0501     — standard 16550A serial port
      */
     {
-        DECLARE_CONST_UNICODE_STRING(hwId, L"GCOM\\COMPort");
+        UNICODE_STRING hwId;
+        RtlInitUnicodeString(&hwId, L"GCOM\\COMPort");
         status = WdfPdoInitAddHardwareID(deviceInit, &hwId);
         if (!NT_SUCCESS(status)) {
             WdfDeviceInitFree(deviceInit);
@@ -162,7 +168,12 @@ GcomComPortCreate(
         WdfPdoInitSetDefaultLocale(deviceInit, 0x0409);
     }
 
-    /* ── Assign raw device type so no function driver is needed ─ */
+    /* ── Assign raw device type so PDO starts without an INF ──
+     *
+     * Without this, PnP won't transition the PDO to D0 (started),
+     * and all I/O requests pend forever. GUID_DEVCLASS_PORTS puts
+     * the device in the Ports class for Device Manager visibility.
+     */
     status = WdfPdoInitAssignRawDevice(deviceInit, &GUID_DEVCLASS_PORTS);
     if (!NT_SUCCESS(status)) {
         WdfDeviceInitFree(deviceInit);
@@ -252,6 +263,10 @@ GcomComPortCreate(
     queueConfig.EvtIoRead = GcomComEvtRead;
     queueConfig.EvtIoWrite = GcomComEvtWrite;
     queueConfig.EvtIoDeviceControl = GcomComEvtIoctl;
+    /* PDOs have PnP power management — queues are power-managed by
+     * default and won't dispatch unless device is in D0. Disable this
+     * so I/O dispatches immediately (same behavior as control devices). */
+    queueConfig.PowerManaged = WdfFalse;
 
     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
     attributes.ParentObject = comDevice;
@@ -390,9 +405,11 @@ GcomComPortDestroy(
         PortPair->ComSymLink.Buffer = NULL;
     }
 
-    /* Delete the WDF device (this also removes the symbolic link). */
+    /* Mark the PDO as missing — WDF/PnP will handle the actual
+     * device deletion. WdfObjectDelete is NOT valid for PDOs and
+     * causes PAGE_FAULT_IN_NONPAGED_AREA in Wdf01000.sys. */
     if (PortPair->ComDevice) {
-        WdfObjectDelete(PortPair->ComDevice);
+        WdfPdoMarkMissing(PortPair->ComDevice);
         PortPair->ComDevice = NULL;
     }
 }

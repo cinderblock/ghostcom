@@ -16,7 +16,7 @@ Class       = System
 ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider    = %ManufacturerName%
 CatalogFile = ghostcom.cat
-DriverVer   = 04/17/2026,0.5.0.0
+DriverVer   = 04/17/2026,0.10.0.0
 PnpLockdown = 1
 
 [DestinationDirs]
@@ -65,7 +65,7 @@ ServiceBinary  = %13%\ghostcom.sys
 KmdfService = GhostCOM, GhostCOM_wdfsect
 
 [GhostCOM_wdfsect]
-KmdfLibraryVersion = 1.35
+KmdfLibraryVersion = 1.33
 
 ; ── Strings ───────────────────────────────────────────────────
 

@@ -14,6 +14,29 @@
     KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL, "ghostcom: " msg "\n", ##__VA_ARGS__))
 
 
+/* ── Child list callback (stub) ───────────────────────────────── */
+
+/*
+ * Required by WDF_CHILD_LIST_CONFIG but never invoked in our design.
+ * We create PDOs manually (WdfPdoInitAllocate + WdfDeviceCreate) from
+ * GcomComPortCreate, so the framework's dynamic enumeration path
+ * doesn't fire.
+ */
+static NTSTATUS
+GcomEvtChildListCreateDevice(
+    _In_ WDFCHILDLIST ChildList,
+    _In_ PWDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER IdentificationDescription,
+    _In_ PWDFDEVICE_INIT ChildInit
+)
+{
+    UNREFERENCED_PARAMETER(ChildList);
+    UNREFERENCED_PARAMETER(IdentificationDescription);
+    UNREFERENCED_PARAMETER(ChildInit);
+    /* Should never be called — we create PDOs manually. */
+    return STATUS_NOT_SUPPORTED;
+}
+
+
 /* ── DriverEntry ──────────────────────────────────────────────── */
 
 NTSTATUS
@@ -172,6 +195,24 @@ GcomEvtDeviceAdd(
         pnpCallbacks.EvtDeviceD0Exit = GcomEvtDeviceD0Exit;
         pnpCallbacks.EvtDeviceSelfManagedIoCleanup = GcomEvtSelfManagedIoCleanup;
         WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnpCallbacks);
+    }
+
+    /* ── Configure the FDO as a bus driver ────────────────────
+     *
+     * WdfPdoInitAllocate (used in comport.c to create COM port PDOs)
+     * requires the parent FDO to have a child list. Without this,
+     * WDF crashes with PAGE_FAULT_IN_NONPAGED_AREA in Wdf01000.sys.
+     *
+     * We use dynamic child list enumeration. The EvtChildListCreateDevice
+     * callback is required but won't be invoked for our use case — we
+     * create PDOs manually via WdfPdoInitAllocate + WdfDeviceCreate.
+     */
+    {
+        WDF_CHILD_LIST_CONFIG childListConfig;
+        WDF_CHILD_LIST_CONFIG_INIT(&childListConfig, sizeof(ULONG),
+                                    GcomEvtChildListCreateDevice);
+        WdfFdoInitSetDefaultChildListConfig(DeviceInit, &childListConfig,
+                                             WDF_NO_OBJECT_ATTRIBUTES);
     }
 
     /* ── Create the device ──────────────────────────────────── */

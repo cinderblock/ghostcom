@@ -16,7 +16,7 @@
 #define KMDF_VERSION_MAJOR 1
 #endif
 #ifndef KMDF_VERSION_MINOR
-#define KMDF_VERSION_MINOR 35
+#define KMDF_VERSION_MINOR 33
 #endif
 
 #include <ntddk.h>
