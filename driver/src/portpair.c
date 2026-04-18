@@ -71,7 +71,36 @@ GcomFindFreePortNumber(
                                                &objAttr);
         if (NT_SUCCESS(st)) {
             ZwClose(linkHandle);
-            continue;  /* This COM number is taken. */
+            continue;  /* COM symlink taken (stale or active). */
+        }
+
+        /* Also check the NT device name and companion symlink —
+         * these can be stale after a crash even if the DOS symlink
+         * was cleaned up. */
+        WCHAR devName[64], compName[64];
+        RtlStringCbPrintfW(devName, sizeof(devName),
+                           L"\\Device\\GCOMSerial%lu", candidate);
+        RtlStringCbPrintfW(compName, sizeof(compName),
+                           L"\\DosDevices\\GCOM%lu", candidate);
+
+        UNICODE_STRING devStr, compStr;
+        RtlInitUnicodeString(&devStr, devName);
+        RtlInitUnicodeString(&compStr, compName);
+
+        OBJECT_ATTRIBUTES devAttr, compAttr;
+        InitializeObjectAttributes(&devAttr, &devStr,
+                                   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                   NULL, NULL);
+        InitializeObjectAttributes(&compAttr, &compStr,
+                                   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                   NULL, NULL);
+
+        /* Check for stale device object. */
+        HANDLE devHandle;
+        st = ZwOpenSymbolicLinkObject(&devHandle, SYMBOLIC_LINK_QUERY, &compAttr);
+        if (NT_SUCCESS(st)) {
+            ZwClose(devHandle);
+            continue;  /* Companion symlink stale. */
         }
 
         return candidate;
@@ -456,6 +485,10 @@ GcomDrainRingToReads(
 )
 {
     WDFREQUEST readReq;
+
+    KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+        "ghostcom [DRAIN]: ring empty=%d, attempting queue retrieve\n",
+        GcomRingIsEmpty(Ring)));
 
     while (!GcomRingIsEmpty(Ring) &&
            NT_SUCCESS(WdfIoQueueRetrieveNextRequest(ReadQueue, &readReq)))

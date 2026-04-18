@@ -61,7 +61,7 @@ describe("GhostCOM — Windows PnP enumeration (expected failures until PDO rewr
     native = createRequire(import.meta.url)(addonPath) as NativeAddon;
   });
 
-  afterAll(() => { setTimeout(() => process.exit(0), 5000); });
+  // process.exit removed — caused stale symlinks.
 
   beforeEach(async () => {
     if (!addonAvailable) return;

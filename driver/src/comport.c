@@ -11,9 +11,7 @@
  */
 
 #include "driver.h"
-#include <devguid.h>    /* GUID_DEVCLASS_PORTS */
 
-/* MAXDWORD is a user-mode constant; define it for kernel mode. */
 #ifndef MAXDWORD
 #define MAXDWORD 0xFFFFFFFF
 #endif
@@ -110,74 +108,16 @@ GcomComPortCreate(
     WDF_IO_QUEUE_CONFIG queueConfig;
     WDF_FILEOBJECT_CONFIG fileConfig;
 
-    UNREFERENCED_PARAMETER(Driver);
+    UNREFERENCED_PARAMETER(DevCtx);
 
-    /* ── Allocate PDO init from the parent FDO ─────────────────
-     *
-     * Using WdfPdoInitAllocate instead of WdfControlDeviceInitAllocate
-     * makes the COM device a proper PnP child of the bus FDO. This means:
-     *   - Device appears in Device Manager under "Ports (COM & LPT)"
-     *   - Registered in SERIALCOMM (we still do this manually below)
-     *   - Discoverable by SetupDi, Get-PnpDevice, .NET SerialPort, etc.
-     *   - GUID_DEVINTERFACE_COMPORT is registered on the PDO
-     */
+    /* ── Allocate and configure device init ──────────────────── */
 
-    deviceInit = WdfPdoInitAllocate(DevCtx->FdoDevice);
+    deviceInit = WdfControlDeviceInitAllocate(
+        Driver,
+        &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R  /* Admins RWX, users RW */
+    );
     if (!deviceInit) {
         return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    /* ── Set hardware IDs for INF matching ─────────────────────
-     *
-     * Hardware ID: GCOM\COMPort  — matched by ghostcom-port.inf
-     * Compatible ID: *PNP0501     — standard 16550A serial port
-     */
-    {
-        UNICODE_STRING hwId;
-        RtlInitUnicodeString(&hwId, L"GCOM\\COMPort");
-        status = WdfPdoInitAddHardwareID(deviceInit, &hwId);
-        if (!NT_SUCCESS(status)) {
-            WdfDeviceInitFree(deviceInit);
-            return status;
-        }
-    }
-
-    /* ── Set unique instance ID (port number) ──────────────── */
-    {
-        WCHAR instanceBuf[16];
-        UNICODE_STRING instanceId;
-        RtlStringCbPrintfW(instanceBuf, sizeof(instanceBuf),
-                           L"%lu", PortNumber);
-        RtlInitUnicodeString(&instanceId, instanceBuf);
-        status = WdfPdoInitAssignInstanceID(deviceInit, &instanceId);
-        if (!NT_SUCCESS(status)) {
-            WdfDeviceInitFree(deviceInit);
-            return status;
-        }
-    }
-
-    /* ── Set device description text ───────────────────────── */
-    {
-        WCHAR descBuf[64];
-        UNICODE_STRING desc, locInfo;
-        RtlStringCbPrintfW(descBuf, sizeof(descBuf),
-                           L"GhostCOM Virtual Serial Port (COM%lu)", PortNumber);
-        RtlInitUnicodeString(&desc, descBuf);
-        RtlInitUnicodeString(&locInfo, L"GhostCOM");
-        WdfPdoInitAddDeviceText(deviceInit, &desc, &locInfo, 0x0409);
-        WdfPdoInitSetDefaultLocale(deviceInit, 0x0409);
-    }
-
-    /* ── Assign raw device type so PDO starts without an INF ──
-     *
-     * Without this, PnP won't transition the PDO to D0 (started),
-     * and all I/O requests pend forever. GUID_DEVCLASS_PORTS puts
-     * the device in the Ports class for Device Manager visibility.
-     */
-    status = WdfPdoInitAssignRawDevice(deviceInit, &GUID_DEVCLASS_PORTS);
-    if (!NT_SUCCESS(status)) {
-        WdfDeviceInitFree(deviceInit);
-        return status;
     }
 
     /* Assign the device name: \Device\GCOMSerial<N> */
@@ -188,14 +128,6 @@ GcomComPortCreate(
     RtlInitUnicodeString(&deviceName, deviceNameBuf);
 
     status = WdfDeviceInitAssignName(deviceInit, &deviceName);
-    if (!NT_SUCCESS(status)) {
-        WdfDeviceInitFree(deviceInit);
-        return status;
-    }
-
-    /* Set device security — allow users to open COM ports. */
-    status = WdfDeviceInitAssignSDDLString(deviceInit,
-                &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R);
     if (!NT_SUCCESS(status)) {
         WdfDeviceInitFree(deviceInit);
         return status;
@@ -232,23 +164,6 @@ GcomComPortCreate(
         }
     }
 
-    /* ── Register GUID_DEVINTERFACE_COMPORT ────────────────────
-     *
-     * This makes the device discoverable via SetupDiGetClassDevs and
-     * other standard serial-port enumeration APIs.
-     */
-    {
-        /* GUID_DEVINTERFACE_COMPORT = {86E0D1E0-8089-11D0-9CE4-08003E301F73} */
-        GUID comportGuid = {0x86E0D1E0, 0x8089, 0x11D0,
-                            {0x9C, 0xE4, 0x08, 0x00, 0x3E, 0x30, 0x1F, 0x73}};
-        status = WdfDeviceCreateDeviceInterface(comDevice, &comportGuid, NULL);
-        if (!NT_SUCCESS(status)) {
-            TraceEvents(0, 0, "COM%lu device interface registration failed: 0x%08X",
-                        PortNumber, status);
-            /* Non-fatal — port still works via symlink, just not PnP-discoverable */
-        }
-    }
-
     /* Store port pair reference in the device context. */
     PGCOM_PORT_DEVICE_CTX portDevCtx = GcomGetPortDeviceContext(comDevice);
     portDevCtx->PortPair = PortPair;
@@ -263,10 +178,6 @@ GcomComPortCreate(
     queueConfig.EvtIoRead = GcomComEvtRead;
     queueConfig.EvtIoWrite = GcomComEvtWrite;
     queueConfig.EvtIoDeviceControl = GcomComEvtIoctl;
-    /* PDOs have PnP power management — queues are power-managed by
-     * default and won't dispatch unless device is in D0. Disable this
-     * so I/O dispatches immediately (same behavior as control devices). */
-    queueConfig.PowerManaged = WdfFalse;
 
     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
     attributes.ParentObject = comDevice;
@@ -363,7 +274,11 @@ GcomComPortCreate(
         ZwClose(keyHandle);
     }
 
-    TraceEvents(0, 0, "COM port PDO created: COM%lu (\\Device\\GCOMSerial%lu)",
+    /* ── Finish initialization ──────────────────────────────── */
+
+    WdfControlFinishInitializing(comDevice);
+
+    TraceEvents(0, 0, "COM port device created: COM%lu (\\Device\\GCOMSerial%lu)",
                 PortNumber, PortNumber);
 
     return STATUS_SUCCESS;
@@ -405,11 +320,9 @@ GcomComPortDestroy(
         PortPair->ComSymLink.Buffer = NULL;
     }
 
-    /* Mark the PDO as missing — WDF/PnP will handle the actual
-     * device deletion. WdfObjectDelete is NOT valid for PDOs and
-     * causes PAGE_FAULT_IN_NONPAGED_AREA in Wdf01000.sys. */
+    /* Delete the WDF device (this also removes the symbolic link). */
     if (PortPair->ComDevice) {
-        WdfPdoMarkMissing(PortPair->ComDevice);
+        WdfObjectDelete(PortPair->ComDevice);
         PortPair->ComDevice = NULL;
     }
 }
@@ -484,14 +397,23 @@ GcomComEvtRead(
             pp->Timeouts.ReadTotalTimeoutConstant == 0)
         {
             /* "Non-blocking" read: complete immediately with 0 bytes. */
+            KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "ghostcom [COM%lu READ]: MAXDWORD timeout, completing with 0\n",
+                pp->PortNumber));
             WdfSpinLockRelease(pp->DataLock);
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, 0);
         } else {
             /* Blocking read — pend until companion writes data. */
             st = WdfRequestForwardToIoQueue(Request, pp->ComReadQueue);
+            KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "ghostcom [COM%lu READ]: ring empty, forwarded to ComReadQueue: 0x%08X\n",
+                pp->PortNumber, st));
             WdfSpinLockRelease(pp->DataLock);
 
             if (!NT_SUCCESS(st)) {
+                KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "ghostcom [COM%lu READ]: ForwardToIoQueue FAILED: 0x%08X\n",
+                    pp->PortNumber, st));
                 WdfRequestComplete(Request, st);
             }
         }
