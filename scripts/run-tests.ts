@@ -1,12 +1,15 @@
 #!/usr/bin/env bun
 /**
- * Runs all test files sequentially (Bun's parallel runner conflicts with
- * driver state) and emits one JUnit XML per file into allure-results/.
+ * Runs all test files sequentially, generates the Allure report, and
+ * ensures the Allure web server is running so the report is always
+ * viewable at http://<host>:4040.
  *
- * Continues past failures so every file produces output, then propagates
- * the aggregate status as the exit code.
+ * Bun's parallel test runner conflicts with driver state, so files
+ * run one at a time. Each file produces a JUnit XML in allure-results/.
+ * After all files finish, the Allure report is regenerated and the
+ * file server is (re)started.
  */
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, readdirSync } from "node:fs";
 import path from "node:path";
 
@@ -17,10 +20,77 @@ const TESTS = [
   "tests/robustness.test.ts",
 ];
 
-const RESULTS_DIR = path.resolve("allure-results");
+const ROOT = path.resolve(".");
+const RESULTS_DIR = path.join(ROOT, "allure-results");
+const REPORT_DIR  = path.join(ROOT, "allure-report");
+const ALLURE_PORT = 4040;
 
-// Fresh results dir each run; history (if present) is restored by
-// generate-allure-report.js before `allure generate`.
+// ── Helpers ─────────────────────────────────────────────────────
+
+function sleepMs(ms: number) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function runCleanup() {
+  console.log("── cleanup ports ──");
+  for (let round = 0; round < 3; round++) {
+    const r = spawnSync("bun", ["run", "tests/cleanup.js"], {
+      stdio: "inherit",
+      shell: true,
+    });
+    if (r.status !== 0) console.warn(`cleanup exit=${r.status}`);
+    sleepMs(2000);
+  }
+}
+
+function killProcessOnPort(port: number) {
+  try {
+    const r = spawnSync("powershell", [
+      "-NoProfile", "-Command",
+      `Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | ` +
+      `ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`,
+    ], { encoding: "utf8" });
+  } catch { /* ignore */ }
+}
+
+function startAllureServer() {
+  killProcessOnPort(ALLURE_PORT);
+  sleepMs(1000);
+
+  const server = spawn("bun", ["-e", `
+    Bun.serve({
+      port: ${ALLURE_PORT},
+      hostname: "0.0.0.0",
+      fetch(req) {
+        const url = new URL(req.url);
+        let p = url.pathname === "/" ? "/index.html" : url.pathname;
+        return new Response(Bun.file("${REPORT_DIR.replace(/\\/g, "/")}" + p));
+      },
+    });
+  `], {
+    stdio: "ignore",
+    detached: true,
+    shell: true,
+  });
+  server.unref();
+  console.log(`allure server started on http://0.0.0.0:${ALLURE_PORT} (pid ${server.pid})`);
+}
+
+function generateReport() {
+  console.log("\n── generating allure report ──");
+  const r = spawnSync("bun", ["run", "scripts/generate-allure-report.ts"], {
+    stdio: "inherit",
+    shell: true,
+    timeout: 60_000,
+  });
+  if (r.status !== 0) {
+    console.warn(`report generation exited with ${r.status}`);
+  }
+}
+
+// ── Main ────────────────────────────────────────────────────────
+
+// Fresh results dir (preserve history subdir).
 if (existsSync(RESULTS_DIR)) {
   for (const f of readdirSync(RESULTS_DIR)) {
     if (f === "history") continue;
@@ -30,19 +100,7 @@ if (existsSync(RESULTS_DIR)) {
   mkdirSync(RESULTS_DIR, { recursive: true });
 }
 
-function sleepMs(ms: number) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
-
-function runCleanup() {
-  console.log("── cleanup ports ──");
-  // Multiple rounds — Driver Verifier slows teardown; ports from
-  // previously killed processes need time to deregister.
-  for (let round = 0; round < 3; round++) {
-    const r = spawnSync("bun", ["run", "tests/cleanup.js"], { stdio: "inherit", shell: true });
-    if (r.status !== 0) console.warn(`cleanup exit=${r.status}`);
-    sleepMs(2000);
-  }
-}
-
+// Run each test file.
 let totalFailed = 0;
 for (const file of TESTS) {
   console.log(`\n── ${file} ──`);
@@ -64,9 +122,6 @@ for (const file of TESTS) {
     {
       stdio: "inherit",
       shell: true,
-      // Hard kill if bun test doesn't exit within 120s.  Native addon
-      // TSFNs can keep the event loop alive after all tests pass; this
-      // ensures the runner always makes progress.
       timeout: 120_000,
     },
   );
@@ -78,9 +133,19 @@ for (const file of TESTS) {
 
 runCleanup();
 
+// ── Summary ─────────────────────────────────────────────────────
+
 console.log(`\n── summary ──`);
 console.log(`test files run: ${TESTS.length}`);
 console.log(`test files with failures: ${totalFailed}`);
 console.log(`results written to: ${RESULTS_DIR}`);
+
+// ── Always generate Allure report ───────────────────────────────
+
+generateReport();
+
+// ── Always (re)start the Allure server ──────────────────────────
+
+startAllureServer();
 
 process.exit(totalFailed === 0 ? 0 : 1);

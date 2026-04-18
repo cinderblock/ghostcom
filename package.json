@@ -24,7 +24,6 @@
     "install:driver": "powershell -ExecutionPolicy Bypass -File scripts/install-driver.ps1",
     "uninstall:driver": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-driver.ps1",
     "test": "bun run scripts/run-tests.ts",
-    "test:report": "bun run scripts/run-tests.ts; bun run scripts/generate-allure-report.ts",
     "report": "bun run scripts/generate-allure-report.ts",
     "report:publish": "bun run scripts/publish-allure-history.ts",
     "typecheck": "tsc --noEmit",
