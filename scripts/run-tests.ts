@@ -114,7 +114,6 @@ for (const file of TESTS) {
     [
       "test",
       file,
-      "--bail",
       "--timeout", "30000",
       "--reporter=junit",
       `--reporter-outfile=${outFile}`,
