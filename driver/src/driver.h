@@ -128,6 +128,9 @@ typedef struct _GCOM_PORT_PAIR {
 /* ── Driver device context (FDO) ──────────────────────────────── */
 
 typedef struct _GCOM_DEVICE_CTX {
+    /* The parent FDO (bus device) — needed for WdfPdoInitAllocate. */
+    WDFDEVICE            FdoDevice;
+
     /* Port pair table */
     PGCOM_PORT_PAIR      Ports[GCOM_MAX_PORTS];
     ULONG                PortCount;

@@ -11,6 +11,7 @@
  */
 
 #include "driver.h"
+#include <devguid.h>    /* GUID_DEVCLASS_PORTS */
 
 /* ── Tracing ──────────────────────────────────────────────────── */
 
@@ -104,16 +105,68 @@ GcomComPortCreate(
     WDF_IO_QUEUE_CONFIG queueConfig;
     WDF_FILEOBJECT_CONFIG fileConfig;
 
-    UNREFERENCED_PARAMETER(DevCtx);
+    UNREFERENCED_PARAMETER(Driver);
 
-    /* ── Allocate and configure device init ──────────────────── */
+    /* ── Allocate PDO init from the parent FDO ─────────────────
+     *
+     * Using WdfPdoInitAllocate instead of WdfControlDeviceInitAllocate
+     * makes the COM device a proper PnP child of the bus FDO. This means:
+     *   - Device appears in Device Manager under "Ports (COM & LPT)"
+     *   - Registered in SERIALCOMM (we still do this manually below)
+     *   - Discoverable by SetupDi, Get-PnpDevice, .NET SerialPort, etc.
+     *   - GUID_DEVINTERFACE_COMPORT is registered on the PDO
+     */
 
-    deviceInit = WdfControlDeviceInitAllocate(
-        Driver,
-        &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R  /* Admins RWX, users RW */
-    );
+    deviceInit = WdfPdoInitAllocate(DevCtx->FdoDevice);
     if (!deviceInit) {
         return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    /* ── Set hardware IDs for INF matching ─────────────────────
+     *
+     * Hardware ID: GCOM\COMPort  — matched by ghostcom-port.inf
+     * Compatible ID: *PNP0501     — standard 16550A serial port
+     */
+    {
+        DECLARE_CONST_UNICODE_STRING(hwId, L"GCOM\\COMPort");
+        status = WdfPdoInitAddHardwareID(deviceInit, &hwId);
+        if (!NT_SUCCESS(status)) {
+            WdfDeviceInitFree(deviceInit);
+            return status;
+        }
+    }
+
+    /* ── Set unique instance ID (port number) ──────────────── */
+    {
+        WCHAR instanceBuf[16];
+        UNICODE_STRING instanceId;
+        RtlStringCbPrintfW(instanceBuf, sizeof(instanceBuf),
+                           L"%lu", PortNumber);
+        RtlInitUnicodeString(&instanceId, instanceBuf);
+        status = WdfPdoInitAssignInstanceID(deviceInit, &instanceId);
+        if (!NT_SUCCESS(status)) {
+            WdfDeviceInitFree(deviceInit);
+            return status;
+        }
+    }
+
+    /* ── Set device description text ───────────────────────── */
+    {
+        WCHAR descBuf[64];
+        UNICODE_STRING desc, locInfo;
+        RtlStringCbPrintfW(descBuf, sizeof(descBuf),
+                           L"GhostCOM Virtual Serial Port (COM%lu)", PortNumber);
+        RtlInitUnicodeString(&desc, descBuf);
+        RtlInitUnicodeString(&locInfo, L"GhostCOM");
+        WdfPdoInitAddDeviceText(deviceInit, &desc, &locInfo, 0x0409);
+        WdfPdoInitSetDefaultLocale(deviceInit, 0x0409);
+    }
+
+    /* ── Assign raw device type so no function driver is needed ─ */
+    status = WdfPdoInitAssignRawDevice(deviceInit, &GUID_DEVCLASS_PORTS);
+    if (!NT_SUCCESS(status)) {
+        WdfDeviceInitFree(deviceInit);
+        return status;
     }
 
     /* Assign the device name: \Device\GCOMSerial<N> */
@@ -124,6 +177,14 @@ GcomComPortCreate(
     RtlInitUnicodeString(&deviceName, deviceNameBuf);
 
     status = WdfDeviceInitAssignName(deviceInit, &deviceName);
+    if (!NT_SUCCESS(status)) {
+        WdfDeviceInitFree(deviceInit);
+        return status;
+    }
+
+    /* Set device security — allow users to open COM ports. */
+    status = WdfDeviceInitAssignSDDLString(deviceInit,
+                &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R);
     if (!NT_SUCCESS(status)) {
         WdfDeviceInitFree(deviceInit);
         return status;
@@ -157,6 +218,23 @@ GcomComPortCreate(
         PDEVICE_OBJECT wdmDevice = WdfDeviceWdmGetDeviceObject(comDevice);
         if (wdmDevice) {
             wdmDevice->Flags &= ~DO_EXCLUSIVE;
+        }
+    }
+
+    /* ── Register GUID_DEVINTERFACE_COMPORT ────────────────────
+     *
+     * This makes the device discoverable via SetupDiGetClassDevs and
+     * other standard serial-port enumeration APIs.
+     */
+    {
+        /* GUID_DEVINTERFACE_COMPORT = {86E0D1E0-8089-11D0-9CE4-08003E301F73} */
+        GUID comportGuid = {0x86E0D1E0, 0x8089, 0x11D0,
+                            {0x9C, 0xE4, 0x08, 0x00, 0x3E, 0x30, 0x1F, 0x73}};
+        status = WdfDeviceCreateDeviceInterface(comDevice, &comportGuid, NULL);
+        if (!NT_SUCCESS(status)) {
+            TraceEvents(0, 0, "COM%lu device interface registration failed: 0x%08X",
+                        PortNumber, status);
+            /* Non-fatal — port still works via symlink, just not PnP-discoverable */
         }
     }
 
@@ -270,11 +348,7 @@ GcomComPortCreate(
         ZwClose(keyHandle);
     }
 
-    /* ── Finish initialization ──────────────────────────────── */
-
-    WdfControlFinishInitializing(comDevice);
-
-    TraceEvents(0, 0, "COM port device created: COM%lu (\\Device\\GCOMSerial%lu)",
+    TraceEvents(0, 0, "COM port PDO created: COM%lu (\\Device\\GCOMSerial%lu)",
                 PortNumber, PortNumber);
 
     return STATUS_SUCCESS;

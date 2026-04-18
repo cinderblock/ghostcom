@@ -189,6 +189,7 @@ GcomEvtDeviceAdd(
 
     devCtx = GcomGetDeviceContext(device);
     RtlZeroMemory(devCtx, sizeof(GCOM_DEVICE_CTX));
+    devCtx->FdoDevice = device;
     devCtx->NextCompanionIndex = 0;
 
     /* Create spinlock for the port table. */

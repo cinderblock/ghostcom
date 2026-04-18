@@ -1,0 +1,61 @@
+;
+; ghostcom-port.inf — Installation INF for GhostCOM virtual COM port
+; child PDOs.
+;
+; The bus driver (ghostcom.sys) creates child PDOs with hardware ID
+; "GCOM\COMPort". This INF matches those PDOs and registers them in
+; the Ports device class so they appear in Device Manager under
+; "Ports (COM & LPT)" and are discoverable by standard Windows
+; serial-port enumeration APIs.
+;
+; Installation:
+;   pnputil /add-driver ghostcom-port.inf /install
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Ports
+ClassGuid   = {4D36E978-E325-11CE-BFC1-08002BE10318}
+Provider    = %ManufacturerName%
+CatalogFile = ghostcom-port.cat
+DriverVer   = 04/17/2026,0.5.0.0
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13  ; Driver Store
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+; No files — driver binary is already installed by ghostcom.inf
+
+; ── Manufacturer ──────────────────────────────────────────────
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64.10.0...16299,NTarm64.10.0...16299
+
+[Standard.NTamd64.10.0...16299]
+%PortDesc% = GhostCOM_Port, GCOM\COMPort
+
+[Standard.NTarm64.10.0...16299]
+%PortDesc% = GhostCOM_Port, GCOM\COMPort
+
+; ── Device Install Section ────────────────────────────────────
+
+[GhostCOM_Port.NT]
+; No file copy — ghostcom.sys is loaded by the bus driver already.
+
+; ── Service Installation ──────────────────────────────────────
+
+[GhostCOM_Port.NT.Services]
+; Null service — the bus driver (GhostCOM) owns the raw PDO directly.
+; No function driver is loaded on top.
+AddService = ,0x00000002
+
+; ── Strings ───────────────────────────────────────────────────
+
+[Strings]
+ManufacturerName = "GhostCOM"
+PortDesc         = "GhostCOM Virtual Serial Port"
+DiskName         = "GhostCOM Driver Installation Disk"

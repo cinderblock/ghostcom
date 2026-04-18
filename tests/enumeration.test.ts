@@ -100,14 +100,18 @@ describe("GhostCOM — Windows PnP enumeration (expected failures until PDO rewr
   // class (WdfPdoInitAllocate + GUID_DEVINTERFACE_COMPORT registration).
   // They'll be converted back to it() after the PDO rewrite + driver rebuild.
 
-  it.todo("HKLM\\HARDWARE\\DEVICEMAP\\SERIALCOMM contains our port", () => {
+  it("HKLM\\HARDWARE\\DEVICEMAP\\SERIALCOMM contains our port", () => {
     if (!addonAvailable) { console.log(SKIP_MSG); return; }
+    // SERIALCOMM stores: value name = \Device\GCOMSerial<N>, value data = COM<N>
     const r = ps(`
-      Get-ItemProperty "HKLM:\\HARDWARE\\DEVICEMAP\\SERIALCOMM" |
-        Select-Object -ExpandProperty "COM${portNumber}" -ErrorAction SilentlyContinue |
-        Out-String
+      $key = Get-Item "HKLM:\\HARDWARE\\DEVICEMAP\\SERIALCOMM" -ErrorAction SilentlyContinue
+      if ($key) {
+        $key.GetValueNames() | ForEach-Object {
+          if ($key.GetValue($_) -eq "COM${portNumber}") { "FOUND" }
+        }
+      }
     `);
-    expect(r.stdout.length).toBeGreaterThan(0);
+    expect(r.stdout).toContain("FOUND");
   });
 
   it.todo("Get-PnpDevice -Class Ports lists our COM port", () => {
@@ -121,7 +125,7 @@ describe("GhostCOM — Windows PnP enumeration (expected failures until PDO rewr
     expect(r.stdout).toMatch(new RegExp(`\\(COM${portNumber}\\)`));
   });
 
-  it.todo("[System.IO.Ports.SerialPort]::GetPortNames() includes our COM port", () => {
+  it("[System.IO.Ports.SerialPort]::GetPortNames() includes our COM port", () => {
     if (!addonAvailable) { console.log(SKIP_MSG); return; }
     const r = ps(`
       [System.IO.Ports.SerialPort]::GetPortNames() -join "\`n"
@@ -129,7 +133,7 @@ describe("GhostCOM — Windows PnP enumeration (expected failures until PDO rewr
     expect(r.stdout.split(/\r?\n/)).toContain(`COM${portNumber}`);
   });
 
-  it.todo("new System.IO.Ports.SerialPort('COM<N>').Open() succeeds", () => {
+  it("new System.IO.Ports.SerialPort('COM<N>').Open() succeeds", () => {
     if (!addonAvailable) { console.log(SKIP_MSG); return; }
     const r = ps(`
       $sp = New-Object System.IO.Ports.SerialPort "COM${portNumber}",9600,None,8,One
