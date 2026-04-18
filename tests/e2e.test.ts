@@ -164,8 +164,10 @@ describe("GhostCOM — full end-to-end bidirectional", () => {
   // Force-exit after all tests — native addon TSFNs keep the event loop
   // alive even after shutdown()/close(). The 1s delay lets bun flush its
   // JUnit reporter before we kill the process.
-  // process.exit removed — it was killing the process before afterEach
-  // could clean up ports, leaving stale symlinks that block future runs.
+  // Force exit after all tests + afterEach complete. The 2s delay
+  // ensures bun flushes the JUnit reporter before exiting. Without
+  // this, native addon TSFNs keep bun's event loop alive indefinitely.
+  afterAll(() => { setTimeout(() => process.exit(0), 2000); });
 
   // ── Per-test setup ───────────────────────────────────────────────────
 
