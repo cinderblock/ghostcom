@@ -34,11 +34,13 @@ function sleepMs(ms: number) { Atomics.wait(new Int32Array(new SharedArrayBuffer
 
 function runCleanup() {
   console.log("── cleanup ports ──");
-  const r = spawnSync("bun", ["run", "tests/cleanup.js"], { stdio: "inherit", shell: true });
-  if (r.status !== 0) console.warn(`cleanup exit=${r.status}`);
-  // Driver Verifier slows teardown — allow destroyed ports to fully
-  // deregister before the next test file tries to create new ones.
-  sleepMs(3000);
+  // Multiple rounds — Driver Verifier slows teardown; ports from
+  // previously killed processes need time to deregister.
+  for (let round = 0; round < 3; round++) {
+    const r = spawnSync("bun", ["run", "tests/cleanup.js"], { stdio: "inherit", shell: true });
+    if (r.status !== 0) console.warn(`cleanup exit=${r.status}`);
+    sleepMs(2000);
+  }
 }
 
 let totalFailed = 0;
@@ -59,7 +61,14 @@ for (const file of TESTS) {
       "--reporter=junit",
       `--reporter-outfile=${outFile}`,
     ],
-    { stdio: "inherit", shell: true },
+    {
+      stdio: "inherit",
+      shell: true,
+      // Hard kill if bun test doesn't exit within 120s.  Native addon
+      // TSFNs can keep the event loop alive after all tests pass; this
+      // ensures the runner always makes progress.
+      timeout: 120_000,
+    },
   );
   if (r.status !== 0) {
     totalFailed++;

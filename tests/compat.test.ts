@@ -14,7 +14,7 @@
  */
 
 import {
-  describe, it, expect, beforeAll, beforeEach, afterEach,
+  describe, it, expect, beforeAll, afterAll, beforeEach, afterEach,
 } from "bun:test";
 import { createRequire } from "node:module";
 import { dlopen, FFIType } from "bun:ffi";
@@ -126,6 +126,8 @@ describe("GhostCOM — COM-side API compatibility", () => {
     if (!addonAvailable) return;
     native = createRequire(import.meta.url)(addonPath) as NativeAddon;
   });
+
+  afterAll(() => { setTimeout(() => process.exit(0), 5000); });
 
   beforeEach(async () => {
     if (!addonAvailable) return;

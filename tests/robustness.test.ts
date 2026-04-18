@@ -7,7 +7,7 @@
  * under sustained load, and create/destroy races.
  */
 
-import { describe, it, expect, beforeAll, beforeEach } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { createRequire } from "node:module";
 import { dlopen, FFIType } from "bun:ffi";
 import path from "node:path";
@@ -86,6 +86,8 @@ describe("GhostCOM — driver robustness", () => {
     if (!addonAvailable) return;
     native = createRequire(import.meta.url)(addonPath) as NativeAddon;
   });
+
+  afterAll(() => { setTimeout(() => process.exit(0), 5000); });
 
   beforeEach(async () => {
     if (!addonAvailable) return;

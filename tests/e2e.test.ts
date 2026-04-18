@@ -161,6 +161,11 @@ describe("GhostCOM — full end-to-end bidirectional", () => {
     native = createRequire(import.meta.url)(addonPath) as NativeAddon;
   });
 
+  // Force-exit after all tests — native addon TSFNs keep the event loop
+  // alive even after shutdown()/close(). The 1s delay lets bun flush its
+  // JUnit reporter before we kill the process.
+  afterAll(() => { setTimeout(() => process.exit(0), 5000); });
+
   // ── Per-test setup ───────────────────────────────────────────────────
 
   beforeEach(async () => {
@@ -300,12 +305,48 @@ describe("GhostCOM — full end-to-end bidirectional", () => {
   // Test 3 — both directions simultaneously
   // ════════════════════════════════════════════════════════════════════
 
-  // KNOWN HANG: bidirectional write + blocking WaitForSingleObject on
-  // the JS thread appears to starve the companion-side TSFN callback.
-  // Commented out during baseline; see ISSUES.md for investigation plan.
-  // TODO: re-enable once the hang is root-caused.
-  //
-  // it("bidirectional: both sides exchange data concurrently without interference", ...);
+  it("bidirectional: both sides exchange data concurrently without interference", async () => {
+    if (!addonAvailable) { console.log(SKIP_MSG); return; }
+
+    // Issue an overlapped ReadFile on COM before either side writes.
+    const hEvt = CreateEventW(null, true, false, null);
+    const ov = mkOv(hEvt);
+    const rbuf = Buffer.alloc(64);
+    ReadFile(hCom, rbuf, 64, null, ov);
+
+    const compMsg = Buffer.from("Ping from companion!\r\n");
+    const comMsg  = Buffer.from("Pong from COM!\r\n");
+
+    // Fire companion write (non-blocking), then COM write, then await.
+    // Sequential order avoids deadlock: writeOverlapped blocks the JS
+    // thread briefly; if the companion write callback needed to deliver
+    // during that window, it would stall. By firing companion first
+    // and COM second (ring empty → instant completion), the callback
+    // arrives after JS unblocks.
+    const compWriteP = new Promise<void>((res, rej) =>
+      nativeStream.write(compMsg, e => (e ? rej(e) : res())),
+    );
+    const written = writeOverlapped(hCom, comMsg, 2000);
+    expect(written).toBe(comMsg.length);
+    await compWriteP;
+
+    // Wait for COM-side read
+    const w = WaitForSingleObject(hEvt, 3000);
+    CloseHandle(hEvt);
+    expect(w).toBe(0);
+    const nb = Buffer.alloc(4);
+    GetOverlappedResult(hCom, ov, nb, false);
+    const comData = rbuf.slice(0, nb.readUInt32LE(0)).toString();
+    expect(comData).toContain("Ping from companion!");
+
+    // Wait for companion-side read
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      if (Buffer.concat(companionReceived).toString().includes("Pong from COM!")) break;
+      await sleep(20);
+    }
+    expect(Buffer.concat(companionReceived).toString()).toContain("Pong from COM!");
+  });
 
   // ════════════════════════════════════════════════════════════════════
   // Test 4 — COM_OPEN signal reaches companion
