@@ -4,11 +4,27 @@
     Install the GhostCOM virtual COM port kernel driver.
 
 .DESCRIPTION
-    Copies the driver package to a staging directory and installs it
-    using pnputil. For development, enables test signing if needed.
+    Two-phase install:
+
+    1. If the Root\GhostCOM device instance doesn't exist yet (fresh
+       machine, or `bun run uninstall:driver` removed it), create it
+       via scripts/create-root-device.ps1 - a devcon-free SetupAPI
+       bootstrap. This also copies the INF into the driver store and
+       binds it to the new device.
+
+    2. If the device already exists, run pnputil /add-driver /install
+       which both updates the driver store and reinstalls the package
+       on the existing device.
+
+    pnputil exits non-zero in several no-op-but-not-failure cases
+    ("Added driver packages: 0" when the device is already up-to-date
+    against the staged package), so we parse stdout for concrete
+    success markers rather than trusting the exit code.
 
 .PARAMETER TestSign
-    Enable Windows test signing mode (requires reboot).
+    Enable Windows test signing mode (requires reboot). Normally only
+    needed on a fresh VM; the build script self-signs with
+    GhostCOMTestCert which only works in test-signing mode.
 
 .PARAMETER DriverPath
     Path to the directory containing ghostcom.sys and ghostcom.inf.
@@ -50,50 +66,76 @@ if ($TestSign) {
     Write-Host ""
 }
 
-# ── Install the driver ─────────────────────────────────────────
+# ── Detect existing device instance ────────────────────────────
 
-Write-Host "Installing driver from: $DriverPath" -ForegroundColor Green
+$existing = Get-PnpDevice -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.InstanceId -like "ROOT\SYSTEM\*" -and
+        $_.FriendlyName -match "GhostCOM Virtual COM Port Controller"
+    } |
+    Select-Object -First 1
 
-# Use pnputil to add the driver to the driver store.
-$result = pnputil /add-driver $infFile /install 2>&1
+# ── Install ────────────────────────────────────────────────────
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "pnputil failed. Trying devcon..." -ForegroundColor Yellow
+if (-not $existing) {
+    # First-time install or post-uninstall - no Root\GhostCOM node exists,
+    # and pnputil can't create one on its own. Fall back to our SetupAPI
+    # bootstrap (the devcon-free devcon-install replacement).
+    Write-Host "No existing Root\GhostCOM device - creating one via SetupAPI." -ForegroundColor Green
 
-    # Fall back to devcon if available.
-    $devcon = Get-Command devcon.exe -ErrorAction SilentlyContinue
-    if ($devcon) {
-        & devcon.exe install $infFile "Root\GhostCOM"
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "devcon install failed. Check the output above."
-            exit 1
+    $createScript = Join-Path $PSScriptRoot "create-root-device.ps1"
+    if (-not (Test-Path $createScript)) {
+        Write-Error "create-root-device.ps1 not found at $createScript"
+        exit 1
+    }
+
+    & $createScript -InfPath $infFile
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to create root device (exit $LASTEXITCODE)."
+        exit 1
+    }
+} else {
+    Write-Host "Found existing device $($existing.InstanceId) - updating its driver." -ForegroundColor Green
+
+    $result = & pnputil /add-driver $infFile /install 2>&1 | Out-String
+    Write-Host $result
+
+    # pnputil exits non-zero on "Added driver packages: 0" (i.e. the
+    # staged package matches the one already on the device - a no-op,
+    # not a failure). Treat any of these stdout markers as success:
+    $successMarkers = @(
+        "Driver package added successfully",
+        "Driver package installed on device",
+        "Driver package is up-to-date on device"
+    )
+    $success = $false
+    foreach ($marker in $successMarkers) {
+        if ($result -match [regex]::Escape($marker)) {
+            $success = $true
+            break
         }
-    } else {
-        Write-Host $result
+    }
+
+    if (-not $success) {
         Write-Error @"
 Driver installation failed.
 
 Make sure:
 1. You are running as Administrator
 2. Test signing is enabled (run with -TestSign flag, then reboot)
-3. The driver is properly signed
+3. The driver is properly signed (bun run build:driver signs by default)
 
 To enable test signing:
     bcdedit /set testsigning on
     (reboot)
-
-To install with devcon:
-    devcon install ghostcom.inf Root\GhostCOM
 "@
         exit 1
     }
-} else {
-    Write-Host $result
 }
 
 Write-Host ""
 Write-Host "Driver installed successfully!" -ForegroundColor Green
 Write-Host ""
 Write-Host "Verify with:" -ForegroundColor Cyan
+Write-Host "  Get-PnpDevice -Class System | Where-Object FriendlyName -match GhostCOM"
 Write-Host "  pnputil /enum-drivers | Select-String -Context 3 'GhostCOM'"
-Write-Host "  sc query GhostCOM"
