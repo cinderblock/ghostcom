@@ -397,11 +397,35 @@ describe("GhostCOM — full end-to-end bidirectional", () => {
   it("setSignals: companion can assert DTR/RTS; getSignals reflects the state", async () => {
     if (!addonAvailable) { console.log(SKIP_MSG); return; }
 
+    // Assert both lines
     nativePort.setSignals(true, true);
     await sleep(100);
-    const s = nativePort.getSignals();
-    expect(s).toBeDefined();
-    expect(typeof s.baudRate).toBe("number");
+    const asserted = nativePort.getSignals();
+    expect(asserted).toBeDefined();
+    expect(typeof asserted.baudRate).toBe("number");
+    expect(asserted.dtrState).toBe(true);
+    expect(asserted.rtsState).toBe(true);
+
+    // De-assert both lines and confirm the state is reflected back
+    nativePort.setSignals(false, false);
+    await sleep(100);
+    const deasserted = nativePort.getSignals();
+    expect(deasserted.dtrState).toBe(false);
+    expect(deasserted.rtsState).toBe(false);
+
+    // Cross-check: DTR only
+    nativePort.setSignals(true, false);
+    await sleep(100);
+    const dtrOnly = nativePort.getSignals();
+    expect(dtrOnly.dtrState).toBe(true);
+    expect(dtrOnly.rtsState).toBe(false);
+
+    // Cross-check: RTS only
+    nativePort.setSignals(false, true);
+    await sleep(100);
+    const rtsOnly = nativePort.getSignals();
+    expect(rtsOnly.dtrState).toBe(false);
+    expect(rtsOnly.rtsState).toBe(true);
 
     nativePort.setSignals(false, false);
   });
