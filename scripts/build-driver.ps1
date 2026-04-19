@@ -12,8 +12,11 @@
 .PARAMETER Platform
     Target platform: x64 or ARM64.
 
-.PARAMETER Sign
-    If specified, self-sign the driver for test signing.
+.PARAMETER NoSign
+    Skip the self-signing step. By default the script signs the driver
+    with the GhostCOMTestCert self-signed cert so it can load on a
+    test-signing-enabled machine; pass -NoSign to produce an unsigned
+    binary (e.g. for downstream signing by a different CA).
 #>
 
 param(
@@ -23,7 +26,7 @@ param(
     [ValidateSet("x64", "ARM64")]
     [string]$Platform = "x64",
 
-    [switch]$Sign
+    [switch]$NoSign
 )
 
 $ErrorActionPreference = "Stop"
@@ -130,8 +133,12 @@ if (Test-Path $infSrc) {
 }
 
 # ── Self-sign for testing ─────────────────────────────────────
+#
+# Signing is on by default - an unsigned .sys will not load on a
+# test-signing-enabled machine (you'll get CM_PROB_UNSIGNED_DRIVER
+# when PnP tries to bind the device). Pass -NoSign to skip.
 
-if ($Sign) {
+if (-not $NoSign) {
     Write-Host ""
     Write-Host "Self-signing driver for test mode..." -ForegroundColor Yellow
 
