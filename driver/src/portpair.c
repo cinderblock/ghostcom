@@ -22,10 +22,15 @@ GcomFindFreePortNumber(
 )
 {
     /*
-     * Scan from COM10 upward, skipping any numbers already in use
+     * Scan from COM1 upward, skipping any numbers already in use
      * by our driver or by the system (check the SERIALCOMM registry).
+     *
+     * COM1-COM9 are rare in modern systems but perfectly valid; if
+     * they happen to be free we'll happily hand them out.  Collisions
+     * with physical serial hardware or other virtual-COM drivers are
+     * filtered by the namespace checks below.
      */
-    for (ULONG candidate = 10; candidate < 256; candidate++) {
+    for (ULONG candidate = 1; candidate < 256; candidate++) {
         BOOLEAN inUse = FALSE;
 
         /* Check our own ports. */

@@ -20,6 +20,7 @@ const TESTS = [
   "tests/compat.test.ts",
   "tests/enumeration.test.ts",
   "tests/robustness.test.ts",
+  "tests/port-selection.test.ts",
   // Bun × serialport regression tracker — expected to fail today
   // (uv_async_send from CreateThread doesn't wake Bun's loop; see
   // ISSUES.md). When Bun fixes it, these tests start passing and we
