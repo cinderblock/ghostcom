@@ -313,17 +313,25 @@ describe("GhostCOM — COM-side API compatibility", () => {
     // signals[] is populated by the beforeEach onSignalChange handler
     signals.length = 0; // clear any events from port open
 
-    // Issue IOCTL_SERIAL_SET_BAUD_RATE with 115200
+    // Issue IOCTL_SERIAL_SET_BAUD_RATE with 115200.
+    // Input: SERIAL_BAUD_RATE { ULONG BaudRate } — 4 bytes.
     const setBaud = Buffer.alloc(4);
     setBaud.writeUInt32LE(115200, 0);
     const nb1 = Buffer.alloc(4);
     const setOk = DeviceIoControl(hCom, IOCTL_SET_BAUD_RATE, setBaud, 4, null, 0, nb1, null);
     expect(setOk).toBe(true);
 
-    // Verify baud rate was stored by reading back from the companion side.
-    // nativePort.getSignals() issues IOCTL_GCOM_GET_SIGNALS on the companion
-    // device (overlapped + wait, using our proven sync_ioctl path), which reads
-    // pp->SignalState.BaudRate — the same field SET_BAUD_RATE writes to.
+    // Read it back via IOCTL_SERIAL_GET_BAUD_RATE on the same COM handle.
+    // Output: SERIAL_BAUD_RATE { ULONG BaudRate } — 4 bytes.
+    const getBaud = Buffer.alloc(4);
+    const nb2 = Buffer.alloc(4);
+    const getOk = DeviceIoControl(hCom, IOCTL_GET_BAUD_RATE, null, 0, getBaud, 4, nb2, null);
+    expect(getOk).toBe(true);
+    expect(nb2.readUInt32LE(0)).toBe(4);              // bytes returned
+    expect(getBaud.readUInt32LE(0)).toBe(115200);     // baud rate
+
+    // Cross-check from the companion side via IOCTL_GCOM_GET_SIGNALS
+    // (reads the same pp->SignalState.BaudRate field).
     const state = nativePort.getSignals();
     expect(state.baudRate).toBe(115200);
 
