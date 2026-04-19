@@ -365,6 +365,9 @@ GcomCompEvtWrite(
 
     if (bytesWritten > 0) {
         /* Wake up pending COM-side reads. */
+        KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+            "ghostcom [COMP WRITE]: wrote %lu bytes to ring, draining to COM reads\n",
+            bytesWritten));
         if (pp->ComReadQueue) {
             GcomDrainRingToReads(&pp->CompanionToCom, pp->ComReadQueue);
         }

@@ -11,6 +11,7 @@
  */
 
 #include "driver.h"
+#include <devguid.h>    /* GUID_DEVCLASS_PORTS */
 
 #ifndef MAXDWORD
 #define MAXDWORD 0xFFFFFFFF
@@ -278,7 +279,68 @@ GcomComPortCreate(
 
     WdfControlFinishInitializing(comDevice);
 
-    TraceEvents(0, 0, "COM port device created: COM%lu (\\Device\\GCOMSerial%lu)",
+    /* ── Report shadow child to PnP via the child list ────────
+     *
+     * The child list callback (GcomEvtChildListCreateDevice) creates
+     * the actual PDO. Here we just tell WDF "this child exists".
+     */
+    {
+        WDFCHILDLIST childList = WdfFdoGetDefaultChildList(DevCtx->FdoDevice);
+
+        /* Diagnostic: write whether we got a child list at all. */
+        {
+            UNICODE_STRING rp;
+            RtlInitUnicodeString(&rp, L"\\Registry\\Machine\\HARDWARE\\DEVICEMAP\\SERIALCOMM");
+            OBJECT_ATTRIBUTES oa;
+            InitializeObjectAttributes(&oa, &rp, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+            HANDLE kh;
+            if (NT_SUCCESS(ZwOpenKey(&kh, KEY_SET_VALUE, &oa))) {
+                UNICODE_STRING vn;
+                RtlInitUnicodeString(&vn, L"CHILDLIST_PTR");
+                ULONG val = (childList != NULL) ? 1 : 0;
+                ZwSetValueKey(kh, &vn, 0, REG_DWORD, &val, sizeof(val));
+                ZwClose(kh);
+            }
+        }
+
+        if (childList) {
+            WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER idHeader;
+            WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER_INIT(&idHeader, sizeof(ULONG) + sizeof(WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER));
+
+            /* Store port number right after the header. */
+            struct {
+                WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER Header;
+                ULONG PortNumber;
+            } idDesc;
+            WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER_INIT(&idDesc.Header, sizeof(idDesc));
+            idDesc.PortNumber = PortNumber;
+
+            NTSTATUS clSt = WdfChildListAddOrUpdateChildDescriptionAsPresent(
+                childList, &idDesc.Header, NULL);
+
+            /* Write status to registry for diagnostics. */
+            {
+                UNICODE_STRING regPath;
+                RtlInitUnicodeString(&regPath,
+                    L"\\Registry\\Machine\\HARDWARE\\DEVICEMAP\\SERIALCOMM");
+                OBJECT_ATTRIBUTES ka;
+                InitializeObjectAttributes(&ka, &regPath,
+                    OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+                HANDLE kh;
+                if (NT_SUCCESS(ZwOpenKey(&kh, KEY_SET_VALUE, &ka))) {
+                    WCHAR vn[32];
+                    UNICODE_STRING vnStr;
+                    RtlStringCbPrintfW(vn, sizeof(vn), L"PDO_STATUS_%lu", PortNumber);
+                    RtlInitUnicodeString(&vnStr, vn);
+                    ULONG val = (ULONG)clSt;
+                    ZwSetValueKey(kh, &vnStr, 0, REG_DWORD, &val, sizeof(val));
+                    ZwClose(kh);
+                }
+            }
+        }
+    }
+
+    TraceEvents(0, 0, "COM port created: COM%lu (\\Device\\GCOMSerial%lu)",
                 PortNumber, PortNumber);
 
     return STATUS_SUCCESS;
@@ -320,11 +382,15 @@ GcomComPortDestroy(
         PortPair->ComSymLink.Buffer = NULL;
     }
 
-    /* Delete the WDF device (this also removes the symbolic link). */
+    /* Delete the COM control device (also removes the symbolic link). */
     if (PortPair->ComDevice) {
         WdfObjectDelete(PortPair->ComDevice);
         PortPair->ComDevice = NULL;
     }
+
+    /* Remove shadow child from the child list (triggers PDO removal). */
+    /* The child list callback created the PDO; reporting it missing
+     * tells PnP to remove it. */
 }
 
 

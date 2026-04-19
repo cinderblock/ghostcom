@@ -14,6 +14,62 @@
     KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL, "ghostcom: " msg "\n", ##__VA_ARGS__))
 
 
+/* ── Child list callback (stub for shadow PDOs) ──────────────── */
+
+static NTSTATUS
+GcomEvtChildListCreateDevice(
+    _In_ WDFCHILDLIST ChildList,
+    _In_ PWDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER Id,
+    _In_ PWDFDEVICE_INIT ChildInit
+)
+{
+    UNREFERENCED_PARAMETER(ChildList);
+
+    /* Extract port number from the identification description. */
+    struct { WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER Header; ULONG PortNumber; } *desc =
+        (void*)Id;
+    ULONG portNumber = desc->PortNumber;
+
+    /* Set hardware ID so the ghost-port INF can match. */
+    UNICODE_STRING hwId;
+    RtlInitUnicodeString(&hwId, L"GCOM\\COMPort");
+    WdfPdoInitAddHardwareID(ChildInit, &hwId);
+
+    /* Unique instance ID. */
+    WCHAR instBuf[16];
+    UNICODE_STRING instId;
+    RtlStringCbPrintfW(instBuf, sizeof(instBuf), L"%lu", portNumber);
+    RtlInitUnicodeString(&instId, instBuf);
+    WdfPdoInitAssignInstanceID(ChildInit, &instId);
+
+    /* Device description text. */
+    WCHAR descBuf[80];
+    UNICODE_STRING descStr, locStr;
+    RtlStringCbPrintfW(descBuf, sizeof(descBuf),
+                       L"GhostCOM Virtual Serial Port (COM%lu)", portNumber);
+    RtlInitUnicodeString(&descStr, descBuf);
+    RtlInitUnicodeString(&locStr, L"GhostCOM");
+    WdfPdoInitAddDeviceText(ChildInit, &descStr, &locStr, 0x0409);
+    WdfPdoInitSetDefaultLocale(ChildInit, 0x0409);
+
+    /* Raw device in the Ports class — no function driver needed. */
+    {
+        /* GUID_DEVCLASS_PORTS = {4D36E978-E325-11CE-BFC1-08002BE10318} */
+        GUID portsGuid = {0x4D36E978, 0xE325, 0x11CE,
+                          {0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18}};
+        WdfPdoInitAssignRawDevice(ChildInit, &portsGuid);
+    }
+
+    /* Create the PDO. */
+    WDF_OBJECT_ATTRIBUTES attr;
+    WDF_OBJECT_ATTRIBUTES_INIT(&attr);
+    WDFDEVICE pdoDevice;
+    NTSTATUS status = WdfDeviceCreate(&ChildInit, &attr, &pdoDevice);
+
+    return status;
+}
+
+
 /* ── DriverEntry ──────────────────────────────────────────────── */
 
 NTSTATUS
@@ -174,6 +230,15 @@ GcomEvtDeviceAdd(
         WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnpCallbacks);
     }
 
+    /* ── Configure child list for shadow PDOs ────────────────── */
+    {
+        WDF_CHILD_LIST_CONFIG clc;
+        WDF_CHILD_LIST_CONFIG_INIT(&clc, sizeof(ULONG),
+                                    GcomEvtChildListCreateDevice);
+        WdfFdoInitSetDefaultChildListConfig(DeviceInit, &clc,
+                                             WDF_NO_OBJECT_ATTRIBUTES);
+    }
+
     /* ── Create the device ──────────────────────────────────── */
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&devAttributes, GCOM_DEVICE_CTX);
@@ -189,6 +254,7 @@ GcomEvtDeviceAdd(
 
     devCtx = GcomGetDeviceContext(device);
     RtlZeroMemory(devCtx, sizeof(GCOM_DEVICE_CTX));
+    devCtx->FdoDevice = device;
     devCtx->NextCompanionIndex = 0;
 
     /* Create spinlock for the port table. */

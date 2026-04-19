@@ -75,8 +75,9 @@ typedef struct _GCOM_PORT_PAIR {
     volatile LONG        Active;
 
     /* Device objects */
-    WDFDEVICE            ComDevice;        /* The serial port device */
+    WDFDEVICE            ComDevice;        /* The serial port device (control device) */
     WDFDEVICE            CompanionDevice;  /* The companion device */
+    WDFDEVICE            PnpPdo;           /* Shadow PDO for Device Manager visibility */
 
     /* Symbolic link names */
     UNICODE_STRING       ComSymLink;       /* \\DosDevices\\COM<N> */
@@ -128,6 +129,9 @@ typedef struct _GCOM_PORT_PAIR {
 /* ── Driver device context (FDO) ──────────────────────────────── */
 
 typedef struct _GCOM_DEVICE_CTX {
+    /* Parent FDO — needed for WdfPdoInitAllocate (shadow PDOs). */
+    WDFDEVICE            FdoDevice;
+
     /* Port pair table */
     PGCOM_PORT_PAIR      Ports[GCOM_MAX_PORTS];
     ULONG                PortCount;
