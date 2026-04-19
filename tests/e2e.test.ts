@@ -383,11 +383,14 @@ describe("GhostCOM — full end-to-end bidirectional", () => {
     hCom = CreateFileW(enc16(`\\\\.\\COM${portNumber}`), 0xC0000000, 3, null, 3, 0x40000000, null);
     await sleep(300);
 
-    const hasClose = signalsReceived.some(s => (s.changedMask & GCOM_CHANGED_COM_CLOSE) !== 0);
-    const hasOpen  = signalsReceived.some(s => (s.changedMask & GCOM_CHANGED_COM_OPEN) !== 0);
+    // Both signals must fire.
+    const closeIdx = signalsReceived.findIndex(s => (s.changedMask & GCOM_CHANGED_COM_CLOSE) !== 0);
+    const openIdx  = signalsReceived.findIndex(s => (s.changedMask & GCOM_CHANGED_COM_OPEN)  !== 0);
 
-    // We expect at least one of these signal events
-    expect(hasClose || hasOpen).toBe(true);
+    expect(closeIdx).toBeGreaterThanOrEqual(0); // COM_CLOSE arrived
+    expect(openIdx).toBeGreaterThanOrEqual(0);  // COM_OPEN arrived
+    // And the order matches the test name: close before open.
+    expect(closeIdx).toBeLessThan(openIdx);
   });
 
   // ════════════════════════════════════════════════════════════════════
