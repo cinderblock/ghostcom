@@ -358,6 +358,36 @@ GcomPortPairDestroy(
     WdfWaitLockRelease(DevCtx->PortTableLock);
 
     /*
+     * Tell WDF the shadow child PDO is gone so PnP tears it down and
+     * re-adds with the same port number will re-invoke our create
+     * callback. Without this, WDF short-circuits duplicate adds with
+     * STATUS_OBJECT_NAME_EXISTS and the callback is never re-run —
+     * meaning once a port number has been used, it can't be recreated
+     * cleanly in the same driver session.
+     *
+     * Safe to call even if we never successfully added the child:
+     * WdfChildListUpdateChildDescriptionAsMissing simply returns
+     * STATUS_NO_SUCH_DEVICE for a description that isn't present,
+     * which is harmless.
+     */
+    {
+        /* Diagnostic registry helper from driver.c. */
+        extern VOID GcomDiagWriteStatus(PCWSTR, ULONG);
+
+        WDFCHILDLIST childList = WdfFdoGetDefaultChildList(DevCtx->FdoDevice);
+        if (childList) {
+            GCOM_CHILD_ID idDesc;
+            WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER_INIT(
+                &idDesc.Header, sizeof(idDesc));
+            idDesc.PortNumber = PortPair->PortNumber;
+            NTSTATUS missSt =
+                WdfChildListUpdateChildDescriptionAsMissing(
+                    childList, &idDesc.Header);
+            GcomDiagWriteStatus(L"Destroy_MarkMissing_Status", (ULONG)missSt);
+        }
+    }
+
+    /*
      * NULL out queue handles under SignalLock BEFORE deleting devices.
      * This prevents GcomSignalChanged / GcomCheckWaitMask from using
      * stale queue handles if they're running concurrently on another CPU.

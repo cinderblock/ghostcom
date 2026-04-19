@@ -304,10 +304,21 @@ GcomComPortCreate(
             GcomDiagWriteStatus(L"AddChild_DescSize", (ULONG)sizeof(idDesc));
             GcomDiagWriteStatus(L"AddChild_PortNumber", PortNumber);
 
-            /* Simple dynamic add — no scan wrapping. For dynamic
-             * child lists, AddOrUpdateChildDescriptionAsPresent on
-             * its own drives WDF to call IoInvalidateDeviceRelations
-             * and trigger PnP to query + materialize the new PDO. */
+            /*
+             * One-shot add — no BeginScan/EndScan wrapping.
+             *
+             * BeginScan/EndScan is the pattern for drivers that
+             * implement EvtChildListScanForChildren and batch many
+             * updates during a periodic rescan. For on-demand adds
+             * like ours, the docs (and the MS toaster/bus sample) say
+             * to call AddOrUpdateChildDescriptionAsPresent directly.
+             *
+             * Earlier experiments wrapped this in BeginScan/EndScan on
+             * the hypothesis that WDF needed the scan boundary to
+             * trigger IoInvalidateDeviceRelations — that turned out to
+             * be wrong (children still didn't appear in
+             * `CM_Get_Child` after EndScan returned). See ATTEMPTS.md.
+             */
             NTSTATUS clSt = WdfChildListAddOrUpdateChildDescriptionAsPresent(
                 childList, &idDesc.Header, NULL);
             GcomDiagWriteStatus(L"AddChild_AddStatus", (ULONG)clSt);
@@ -316,14 +327,87 @@ GcomComPortCreate(
                             PortNumber, clSt);
             }
 
-            /* Explicit kick. Some WDF versions / scenarios don't
-             * automatically invalidate after AddOrUpdate outside
-             * BeginScan/EndScan, so do it ourselves as a belt-and-
-             * suspenders. */
+            /*
+             * Diagnostic: pull back the PDO that WDF stored in the
+             * child list. If this returns a valid handle, WDF knows
+             * about the child and will return it in BusRelations —
+             * in that case the bug must be further down the stack.
+             * If it returns NULL, our add never took effect despite
+             * returning success above.
+             */
+            {
+                GCOM_CHILD_ID lookupDesc;
+                WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER_INIT(
+                    &lookupDesc.Header, sizeof(lookupDesc));
+                lookupDesc.PortNumber = PortNumber;
+
+                WDF_CHILD_RETRIEVE_INFO retInfo;
+                WDF_CHILD_RETRIEVE_INFO_INIT(&retInfo, &lookupDesc.Header);
+                WDFDEVICE retrievedPdo =
+                    WdfChildListRetrievePdo(childList, &retInfo);
+                GcomDiagWriteStatus(L"AddChild_RetrievePdoStatus",
+                                    (ULONG)retInfo.Status);
+                GcomDiagWriteStatus(L"AddChild_RetrievedPdoLow",
+                                    (ULONG)((ULONG_PTR)retrievedPdo & 0xFFFFFFFFUL));
+            }
+
+            /*
+             * Wait for WDF to invoke EvtChildListCreateDevice and mark
+             * the PDO as created. The callback runs asynchronously
+             * from AddOrUpdateChildDescriptionAsPresent (we've
+             * measured 1 × 100 ms wait being enough). If we don't
+             * wait, our IoInvalidateDeviceRelations below runs first,
+             * PnP gets an empty BusRelations reply, and nothing later
+             * re-kicks PnP (that's exactly the bug trail in ATTEMPTS.md).
+             *
+             * Note: this polls at PASSIVE_LEVEL via
+             * KeDelayExecutionThread, which is safe from the IOCTL
+             * dispatch path where GcomPortPairCreate is called.
+             */
             PDEVICE_OBJECT physDev =
                 WdfDeviceWdmGetPhysicalDevice(DevCtx->FdoDevice);
             GcomDiagWriteStatus(L"AddChild_HasPhysDev",
                                 physDev != NULL ? 1 : 0);
+
+            {
+                ULONG attempts;
+                WDF_CHILD_LIST_RETRIEVE_DEVICE_STATUS lastSt =
+                    WdfChildListRetrieveDeviceUndefined;
+                WDFDEVICE retrievedPdo = NULL;
+
+                for (attempts = 0; attempts < 10; attempts++) {
+                    GCOM_CHILD_ID lookupDesc;
+                    WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER_INIT(
+                        &lookupDesc.Header, sizeof(lookupDesc));
+                    lookupDesc.PortNumber = PortNumber;
+
+                    WDF_CHILD_RETRIEVE_INFO retInfo;
+                    WDF_CHILD_RETRIEVE_INFO_INIT(&retInfo, &lookupDesc.Header);
+                    retrievedPdo = WdfChildListRetrievePdo(childList, &retInfo);
+                    lastSt = retInfo.Status;
+
+                    if (lastSt == WdfChildListRetrieveDeviceSuccess) {
+                        break;
+                    }
+
+                    LARGE_INTEGER delay;
+                    delay.QuadPart = -(LONGLONG)100 * 1000 * 10;  /* 100 ms */
+                    KeDelayExecutionThread(KernelMode, FALSE, &delay);
+                }
+
+                GcomDiagWriteStatus(L"AddChild_WaitAttempts", attempts);
+                GcomDiagWriteStatus(L"AddChild_WaitFinalStatus", (ULONG)lastSt);
+                GcomDiagWriteStatus(L"AddChild_WaitPdoLow",
+                                    (ULONG)((ULONG_PTR)retrievedPdo & 0xFFFFFFFFUL));
+            }
+
+            /*
+             * Per MSDN IoInvalidateDeviceRelations: for BusRelations,
+             * DeviceObject is the PDO of the device whose children
+             * changed. For our bus FDO that's the root-enum PDO at the
+             * bottom of our stack — returned by
+             * WdfDeviceWdmGetPhysicalDevice.
+             */
             if (physDev) {
                 IoInvalidateDeviceRelations(physDev, BusRelations);
                 GcomDiagWriteStatus(L"AddChild_InvalidatedRelations", 1);

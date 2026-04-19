@@ -41,6 +41,244 @@ GcomDiagWriteStatus(_In_ PCWSTR ValueName, _In_ ULONG Status)
 }
 
 
+/* ── PnP IRP preprocess callback (BusRelations diagnostic) ────── */
+
+/*
+ * Completion routine — logs the outcome of a BusRelations query AFTER
+ * WDF's internal handler has filled in Irp->IoStatus.Information with
+ * the list of child PDOs. This is what finally tells us whether WDF's
+ * BusRelations responder is producing empty results or whether our
+ * children are getting dropped somewhere else.
+ */
+static NTSTATUS
+GcomPnpBusRelationsCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_opt_ PVOID Context
+)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(Context);
+
+    if (Irp->PendingReturned) {
+        IoMarkIrpPending(Irp);
+    }
+
+    PDEVICE_RELATIONS rel = (PDEVICE_RELATIONS)Irp->IoStatus.Information;
+    /* Sentinel 0xFFFFFFFF means the DEVICE_RELATIONS pointer itself
+     * was NULL — distinct from an empty-but-present list (Count=0). */
+    ULONG count = (rel != NULL) ? rel->Count : 0xFFFFFFFFUL;
+    GcomDiagWriteStatus(L"Pnp_BusRel_CompCount", count);
+    GcomDiagWriteStatus(L"Pnp_BusRel_CompStatus", (ULONG)Irp->IoStatus.Status);
+    if (rel != NULL && rel->Count > 0) {
+        GcomDiagWriteStatus(L"Pnp_BusRel_FirstPdoLow",
+                            (ULONG)((ULONG_PTR)rel->Objects[0] & 0xFFFFFFFFUL));
+    }
+
+    return STATUS_CONTINUE_COMPLETION;
+}
+
+/*
+ * Preprocess callback for IRP_MJ_PNP / IRP_MN_QUERY_DEVICE_RELATIONS.
+ *
+ * Every time PnP asks our FDO for its relations, we get first crack at
+ * the IRP here. We log the RelationType so we can see whether
+ * BusRelations queries are arriving at all, then hand the IRP back to
+ * WDF via WdfDeviceWdmDispatchPreprocessedIrp so the normal child-list
+ * / BusRelations machinery runs.
+ *
+ * We install the completion routine so we can ALSO see the result of
+ * WDF's BusRelations handler (Count + Status). In v0.44 this
+ * correctly showed Count=1 + SUCCESS + valid PDO pointer — proof
+ * the handler is working. Also logs the return value of
+ * WdfDeviceWdmDispatchPreprocessedIrp in case it's failing silently
+ * and taking EvtChildListCreateDevice down with it.
+ */
+static NTSTATUS
+GcomPnpPreprocessIrp(
+    _In_ WDFDEVICE Device,
+    _Inout_ PIRP Irp
+)
+{
+    PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
+    BOOLEAN isBusRel = FALSE;
+
+    if (stack->MajorFunction == IRP_MJ_PNP &&
+        stack->MinorFunction == IRP_MN_QUERY_DEVICE_RELATIONS)
+    {
+        DEVICE_RELATION_TYPE type =
+            stack->Parameters.QueryDeviceRelations.Type;
+        GcomDiagWriteStatus(L"Pnp_QueryRelType", (ULONG)type);
+
+        if (type == BusRelations) {
+            static LONG seen = 0;
+            LONG n = InterlockedIncrement(&seen);
+            GcomDiagWriteStatus(L"Pnp_BusRel_SeenCount", (ULONG)n);
+            isBusRel = TRUE;
+        }
+    }
+
+    if (isBusRel) {
+        IoCopyCurrentIrpStackLocationToNext(Irp);
+        IoSetCompletionRoutine(Irp, GcomPnpBusRelationsCompletion,
+                               NULL, TRUE, TRUE, TRUE);
+    }
+
+    NTSTATUS dispSt = WdfDeviceWdmDispatchPreprocessedIrp(Device, Irp);
+    if (isBusRel) {
+        GcomDiagWriteStatus(L"Pnp_BusRel_DispStatus", (ULONG)dispSt);
+    }
+    return dispSt;
+}
+
+
+/* ── PDO device context ─────────────────────────────────────────
+ *
+ * We stash the requested COM port number here so the QUERY_ID
+ * preprocess can pre-populate `PortName` in the PDO's
+ * Device Parameters registry key before msports' class installer
+ * runs — otherwise msports allocates its own COM number from ComDB
+ * and our driver's \DosDevices\COMN symlink / SERIALCOMM entry end
+ * up using a different number than the PDO's FriendlyName. See
+ * ATTEMPTS.md "COM-number mismatch" follow-up.
+ */
+typedef struct _GCOM_PDO_CTX {
+    ULONG    PortNumber;
+    BOOLEAN  PortNameWritten;  /* idempotency guard */
+} GCOM_PDO_CTX, *PGCOM_PDO_CTX;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(GCOM_PDO_CTX, GcomGetPdoContext)
+
+
+/* ── PDO-side PnP preprocess (QUERY_ID / QUERY_CAPABILITIES) ───── */
+
+/*
+ * Completion routine for a PDO PnP IRP — logs the outcome with a
+ * tagged name so we can see which IRPs got satisfied vs. dropped.
+ *
+ * WDF handles all these IRPs internally for PDOs (based on the
+ * WdfPdoInitAdd* calls we made in EvtChildListCreateDevice). If any
+ * come back with failure, that tells us WDF's per-PDO responder is
+ * not happy with something we configured.
+ */
+static NTSTATUS
+GcomPdoPnpCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_opt_ PVOID Context
+)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    /* Context is a packed (minor<<8 | idType); used only for tagging. */
+    ULONG_PTR tag = (ULONG_PTR)Context;
+
+    if (Irp->PendingReturned) {
+        IoMarkIrpPending(Irp);
+    }
+
+    WCHAR valName[64];
+    RtlStringCbPrintfW(valName, sizeof(valName),
+                       L"Pdo_Query%08lx_Status", (ULONG)tag);
+    GcomDiagWriteStatus(valName, (ULONG)Irp->IoStatus.Status);
+
+    /* For QUERY_ID, Information is a PWSTR returned to the caller.
+     * Log its low 32 bits as a presence sentinel. */
+    RtlStringCbPrintfW(valName, sizeof(valName),
+                       L"Pdo_Query%08lx_InfoLow", (ULONG)tag);
+    GcomDiagWriteStatus(valName,
+        (ULONG)((ULONG_PTR)Irp->IoStatus.Information & 0xFFFFFFFFUL));
+
+    return STATUS_CONTINUE_COMPLETION;
+}
+
+/*
+ * PnP preprocess for the child PDO. Logs every PnP IRP's minor
+ * function number to a rolling "latest" counter, plus the specific
+ * QUERY_ID type when applicable, and installs a completion routine so
+ * we see what WDF actually returned.
+ *
+ * This lets us answer: after PnP receives our PDO in BusRelations,
+ * does it follow up with QUERY_ID? If yes, what does WDF tell it?
+ */
+static NTSTATUS
+GcomPdoPnpPreprocessIrp(
+    _In_ WDFDEVICE Device,
+    _Inout_ PIRP Irp
+)
+{
+    PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
+
+    if (stack->MajorFunction == IRP_MJ_PNP) {
+        /* Record the most recent minor function seen on this PDO. */
+        GcomDiagWriteStatus(L"Pdo_LastPnpMinor",
+                            (ULONG)stack->MinorFunction);
+
+        if (stack->MinorFunction == IRP_MN_QUERY_ID) {
+            BUS_QUERY_ID_TYPE idType = stack->Parameters.QueryId.IdType;
+            GcomDiagWriteStatus(L"Pdo_LastQueryIdType", (ULONG)idType);
+
+            /*
+             * Pre-populate `PortName` in the PDO's Device Parameters
+             * registry key on the first QUERY_ID we see. The Enum key
+             * for this PDO is created by PnP right before QUERY_ID is
+             * sent, so IoOpenDeviceRegistryKey succeeds here. msports'
+             * class installer runs later (after INF matching completes,
+             * before START_DEVICE) — at which point it finds PortName
+             * already set and skips its ComDB allocation. Result: the
+             * FriendlyName uses OUR port number, not a ComDB one.
+             *
+             * Idempotent: the context flag `PortNameWritten` ensures
+             * we only do this once per PDO even though QUERY_ID fires
+             * many times (one per idType = DeviceID, HardwareIDs,
+             * CompatibleIDs, InstanceID, ContainerID).
+             */
+            PGCOM_PDO_CTX pdoCtx = GcomGetPdoContext(Device);
+            if (pdoCtx != NULL && !pdoCtx->PortNameWritten) {
+                PDEVICE_OBJECT pdoWdm = WdfDeviceWdmGetDeviceObject(Device);
+                HANDLE keyHandle = NULL;
+                NTSTATUS st = IoOpenDeviceRegistryKey(
+                    pdoWdm, PLUGPLAY_REGKEY_DEVICE,
+                    KEY_SET_VALUE, &keyHandle);
+                GcomDiagWriteStatus(L"Pdo_IoOpenRegKey_Status",
+                                    (ULONG)st);
+                if (NT_SUCCESS(st) && keyHandle != NULL) {
+                    WCHAR portNameBuf[16];
+                    UNICODE_STRING valName;
+                    RtlInitUnicodeString(&valName, L"PortName");
+                    NTSTATUS fmtSt = RtlStringCbPrintfW(
+                        portNameBuf, sizeof(portNameBuf),
+                        L"COM%lu", pdoCtx->PortNumber);
+                    if (NT_SUCCESS(fmtSt)) {
+                        SIZE_T len = (wcslen(portNameBuf) + 1) *
+                                     sizeof(WCHAR);
+                        NTSTATUS wrSt = ZwSetValueKey(
+                            keyHandle, &valName, 0, REG_SZ,
+                            portNameBuf, (ULONG)len);
+                        GcomDiagWriteStatus(L"Pdo_PortName_WriteStatus",
+                                            (ULONG)wrSt);
+                        if (NT_SUCCESS(wrSt)) {
+                            pdoCtx->PortNameWritten = TRUE;
+                            GcomDiagWriteStatus(L"Pdo_PortName_Written",
+                                                pdoCtx->PortNumber);
+                        }
+                    }
+                    ZwClose(keyHandle);
+                }
+            }
+
+            /* Tag combines minor + idType for distinct reg values. */
+            ULONG_PTR tag = ((ULONG_PTR)stack->MinorFunction << 16) |
+                            (ULONG_PTR)idType;
+            IoCopyCurrentIrpStackLocationToNext(Irp);
+            IoSetCompletionRoutine(Irp, GcomPdoPnpCompletion,
+                                   (PVOID)tag, TRUE, TRUE, TRUE);
+        }
+    }
+
+    return WdfDeviceWdmDispatchPreprocessedIrp(Device, Irp);
+}
+
+
 /* ── Child list callback — creates the Ports-class PDO ────────── */
 
 /*
@@ -74,6 +312,28 @@ GcomEvtChildListCreateDevice(
 
     TraceEvents(0, 0, "ChildListCreateDevice: creating PDO for COM%lu", portNumber);
     GcomDiagWriteStatus(L"Callback_Entry", portNumber);
+
+    /* Device ID — THE fundamental PnP identifier. Without this, WDF
+     * returns STATUS_NOT_SUPPORTED for IRP_MN_QUERY_ID/BusQueryDeviceID,
+     * which makes PnP silently drop the PDO (no Enum\GCOM key created,
+     * no devnode). This was the bug that kept enumeration tests failing
+     * for a full session: PDO was being built correctly, BusRelations
+     * returned it to PnP successfully, but PnP couldn't name it.
+     *
+     * The KMDF docs claim the first hardware ID is used as a fallback,
+     * but in KMDF 1.33 that fallback apparently doesn't fire — we MUST
+     * call WdfPdoInitAssignDeviceID explicitly. Diagnostic trail
+     * `Pdo_Query00130000_Status=0xC00000BB` on the PDO's preprocess
+     * callback proved this definitively. See ATTEMPTS.md. */
+    UNICODE_STRING deviceId;
+    RtlInitUnicodeString(&deviceId, L"GCOM\\COMPort");
+    status = WdfPdoInitAssignDeviceID(ChildInit, &deviceId);
+    GcomDiagWriteStatus(L"Callback_AssignDeviceId_Status", (ULONG)status);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(0, 0, "COM%lu: WdfPdoInitAssignDeviceID failed 0x%08X",
+                    portNumber, status);
+        return status;
+    }
 
     /* Hardware ID — matches ghostcom-port.inf. */
     UNICODE_STRING hwId;
@@ -119,13 +379,24 @@ GcomEvtChildListCreateDevice(
     }
     WdfPdoInitSetDefaultLocale(ChildInit, 0x0409);
 
-    /* Raw device in the Ports class — no function driver needed. */
-    status = WdfPdoInitAssignRawDevice(ChildInit, &gGuidDevclassPorts);
-    if (!NT_SUCCESS(status)) {
-        TraceEvents(0, 0, "COM%lu: WdfPdoInitAssignRawDevice failed 0x%08X",
-                    portNumber, status);
-        return status;
-    }
+    /*
+     * NOTE: Historically we called
+     *   WdfPdoInitAssignRawDevice(ChildInit, &gGuidDevclassPorts);
+     * to mark this as a raw PDO in the Ports class (paired with a null
+     * [Services] section in ghostcom-port.inf). That was wrong:
+     * BusRelations queries on the FDO returned no children (verified via
+     * `pnputil /enum-devices /instanceid ROOT\SYSTEM\0001 /relations` —
+     * no child row), so PnP never even saw the hardware ID. setupapi.dev.log
+     * had no GCOM\COMPort activity at all.
+     *
+     * Letting ghostcom-port.inf install as a proper (null-service) function
+     * driver is the documented path for "software-only serial port pulled
+     * in through class installer." The Ports class installer is what
+     * constructs the FriendlyName "<DeviceDesc> (COM<N>)" from the
+     * PortName registry value — which is what
+     * `Get-PnpDevice -Class Ports` actually matches against in the test.
+     * See ATTEMPTS.md for the full history.
+     */
 
     /* Allow user-mode (PowerShell / Get-PnpDevice) to open file handles
      * on the PDO. D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;BU): SYSTEM and
@@ -139,16 +410,81 @@ GcomEvtChildListCreateDevice(
         return status;
     }
 
-    /* Create the PDO. */
+    /* Install PnP preprocess callback on this PDO for IRP_MN_QUERY_ID
+     * so we can see exactly what PnP asks after receiving this PDO in
+     * BusRelations, and whether WDF's responder fills in the right
+     * Device / Hardware / Instance / Compatible IDs. If PnP never asks,
+     * we know the PDO is being dropped without PnP even looking at it. */
+    {
+        UCHAR pdoMinors[] = {
+            (UCHAR)IRP_MN_QUERY_ID,
+            (UCHAR)IRP_MN_QUERY_CAPABILITIES,
+            (UCHAR)IRP_MN_QUERY_DEVICE_TEXT,
+        };
+        NTSTATUS pdoPpSt = WdfDeviceInitAssignWdmIrpPreprocessCallback(
+            ChildInit,
+            GcomPdoPnpPreprocessIrp,
+            IRP_MJ_PNP,
+            pdoMinors,
+            ARRAYSIZE(pdoMinors));
+        GcomDiagWriteStatus(L"Callback_PdoPreprocStatus", (ULONG)pdoPpSt);
+    }
+
+    /* Create the PDO with a GCOM_PDO_CTX attached. The context carries
+     * our internal port number down into the PDO's PnP preprocess
+     * callback so it can pre-write PortName before msports runs. */
     WDF_OBJECT_ATTRIBUTES attr;
-    WDF_OBJECT_ATTRIBUTES_INIT(&attr);
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attr, GCOM_PDO_CTX);
     WDFDEVICE pdoDevice;
     status = WdfDeviceCreate(&ChildInit, &attr, &pdoDevice);
     GcomDiagWriteStatus(L"Callback_PdoCreate_Status", (ULONG)status);
+    /* Diagnostic: low 32 bits of the PDO handle so we can verify it's
+     * non-NULL even when status=0 (cheap sanity check). */
+    GcomDiagWriteStatus(L"Callback_PdoDeviceLow",
+                        (ULONG)((ULONG_PTR)pdoDevice & 0xFFFFFFFFUL));
     if (!NT_SUCCESS(status)) {
         TraceEvents(0, 0, "COM%lu: WdfDeviceCreate (PDO) failed 0x%08X",
                     portNumber, status);
         return status;
+    }
+
+    /* Initialize the per-PDO context with our port number so the PnP
+     * preprocess callback (QUERY_ID) can write it to the registry. */
+    {
+        PGCOM_PDO_CTX pdoCtx = GcomGetPdoContext(pdoDevice);
+        if (pdoCtx != NULL) {
+            pdoCtx->PortNumber       = portNumber;
+            pdoCtx->PortNameWritten  = FALSE;
+            GcomDiagWriteStatus(L"Callback_PdoCtxInit", portNumber);
+        } else {
+            GcomDiagWriteStatus(L"Callback_PdoCtxInit_NULL", 0);
+        }
+    }
+
+    /* Diagnostic: check the PDEVICE_OBJECT the PDO wraps. If this is
+     * non-NULL, WDF has a real kernel device object — at that point
+     * BusRelations should be able to return it. */
+    {
+        PDEVICE_OBJECT pdoWdm = WdfDeviceWdmGetDeviceObject(pdoDevice);
+        GcomDiagWriteStatus(L"Callback_PdoWdmLow",
+                            (ULONG)((ULONG_PTR)pdoWdm & 0xFFFFFFFFUL));
+    }
+
+    /* Explicit PnP capabilities. Without these, some versions of WDF
+     * create PDOs that PnP treats as "not physically present yet" and
+     * never queries BusRelations properly. Setting NoDisplayInUI=FALSE
+     * + Removable=TRUE tells PnP this PDO is a real device that should
+     * be enumerated under its parent FDO. */
+    {
+        WDF_DEVICE_PNP_CAPABILITIES pnpCaps;
+        WDF_DEVICE_PNP_CAPABILITIES_INIT(&pnpCaps);
+        pnpCaps.Removable          = WdfTrue;
+        pnpCaps.SurpriseRemovalOK  = WdfTrue;
+        pnpCaps.NoDisplayInUI      = WdfFalse;
+        pnpCaps.Address            = portNumber;
+        pnpCaps.UINumber           = portNumber;
+        WdfDeviceSetPnpCapabilities(pdoDevice, &pnpCaps);
+        GcomDiagWriteStatus(L"Callback_PnpCapsSet", 1);
     }
 
     /* Register the serial-port device interface. This is what makes
@@ -338,14 +674,31 @@ GcomEvtDeviceAdd(
      */
     WdfDeviceInitSetExclusive(DeviceInit, FALSE);
 
-    /* Set a device name so we can create a control device symlink. */
-    UNICODE_STRING deviceName;
-    RtlInitUnicodeString(&deviceName, L"\\Device\\GhostCOM");
-    status = WdfDeviceInitAssignName(DeviceInit, &deviceName);
-    if (!NT_SUCCESS(status)) {
-        TraceEvents(0, 0, "WdfDeviceInitAssignName failed: 0x%08X", status);
-        return status;
-    }
+    /*
+     * Declare this FDO as a bus extender.
+     *
+     * Without this, WDF leaves the device type as FILE_DEVICE_UNKNOWN
+     * and PnP does not treat the FDO as the parent of its own PDO
+     * stack. In that state, WDF's BusRelations handler runs and finds
+     * the child, but PnP never publishes the child because the FDO
+     * isn't registered as a bus. Switching to FILE_DEVICE_BUS_EXTENDER
+     * + WdfFdoInitSetDefaultChildListConfig is the canonical KMDF
+     * pattern — every MS WDK bus-driver sample (toaster/bus, kmdf/bus,
+     * virtserial2) sets this.
+     */
+    WdfDeviceInitSetDeviceType(DeviceInit, FILE_DEVICE_BUS_EXTENDER);
+
+    /*
+     * NOTE: We used to call
+     *   WdfDeviceInitAssignName(DeviceInit, L"\Device\GhostCOM");
+     * here. That was wrong for a bus FDO — named FDOs are treated as
+     * legacy (non-PnP) devices in some WDM paths, and BusRelations
+     * queries on a legacy-looking FDO are ignored. All user-mode
+     * access goes through \\.\GCOMControl (a separate WDFCONTROLDEVICE
+     * with its own name + symlink) and through the per-port companion
+     * devices \\.\GCOMSerialN — the FDO itself never needs a name.
+     * See ATTEMPTS.md for the investigation trail.
+     */
 
     /*
      * Allow user-mode to open file handles on the device (for the
@@ -383,6 +736,28 @@ GcomEvtDeviceAdd(
                                              WDF_NO_OBJECT_ATTRIBUTES);
     }
 
+    /* ── PnP IRP preprocess (BusRelations diagnostic) ──────────
+     * Install a WDM-level preprocess for IRP_MJ_PNP /
+     * IRP_MN_QUERY_DEVICE_RELATIONS so we can verify whether PnP is
+     * actually sending BusRelations queries after we call
+     * IoInvalidateDeviceRelations on the FDO's physical device.
+     *
+     * If Pnp_BusRel_SeenCount never increments after AddChild_Invalidated
+     * Relations=1, the IoInvalidateDeviceRelations → BusRelations query
+     * chain is broken and WDF's child list never gets consulted. If it
+     * does increment but Pnp_BusRel_CompCount=0, then WDF IS running its
+     * BusRelations handler but dropping our children. See ATTEMPTS.md. */
+    {
+        UCHAR minorFuncs[1] = { (UCHAR)IRP_MN_QUERY_DEVICE_RELATIONS };
+        NTSTATUS ppSt = WdfDeviceInitAssignWdmIrpPreprocessCallback(
+            DeviceInit,
+            GcomPnpPreprocessIrp,
+            IRP_MJ_PNP,
+            minorFuncs,
+            ARRAYSIZE(minorFuncs));
+        GcomDiagWriteStatus(L"FdoInit_PreprocStatus", (ULONG)ppSt);
+    }
+
     /* ── Create the device ──────────────────────────────────── */
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&devAttributes, GCOM_DEVICE_CTX);
@@ -392,6 +767,28 @@ GcomEvtDeviceAdd(
     if (!NT_SUCCESS(status)) {
         TraceEvents(0, 0, "WdfDeviceCreate failed: 0x%08X", status);
         return status;
+    }
+
+    /*
+     * Diagnostic: confirm WDF honored our child-list config by reading
+     * the default child list back. If WdfFdoGetDefaultChildList returns
+     * NULL here, WdfFdoInitSetDefaultChildListConfig silently did
+     * nothing — which would mean WDF didn't install its BusRelations
+     * handler, and any subsequent WdfChildListAddOrUpdateChildDescriptionAsPresent
+     * calls will look like they succeed but never result in PnP
+     * publication.
+     */
+    {
+        WDFCHILDLIST cl = WdfFdoGetDefaultChildList(device);
+        GcomDiagWriteStatus(L"FdoAdd_ChildListNonNull", cl != NULL ? 1 : 0);
+        GcomDiagWriteStatus(L"FdoAdd_FdoHandleLow",
+                            (ULONG)((ULONG_PTR)device & 0xFFFFFFFFUL));
+        PDEVICE_OBJECT fdoWdm = WdfDeviceWdmGetDeviceObject(device);
+        GcomDiagWriteStatus(L"FdoAdd_FdoWdmLow",
+                            (ULONG)((ULONG_PTR)fdoWdm & 0xFFFFFFFFUL));
+        PDEVICE_OBJECT fdoPhys = WdfDeviceWdmGetPhysicalDevice(device);
+        GcomDiagWriteStatus(L"FdoAdd_FdoPhysLow",
+                            (ULONG)((ULONG_PTR)fdoPhys & 0xFFFFFFFFUL));
     }
 
     /* ── Initialize device context ──────────────────────────── */
