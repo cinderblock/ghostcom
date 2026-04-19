@@ -81,11 +81,17 @@ GcomComEvtFileClose(
     TraceEvents(0, 0, "COM%lu closed", pp->PortNumber);
 
     /*
-     * Do NOT call GcomSignalChanged here. WDF calls EvtFileClose
-     * asynchronously — it can fire after GcomPortPairDestroy has
-     * already deleted SignalLock and SignalWaitQueue. Just clear
-     * the open flag and release the reference.
+     * Notify companion watchers that the COM side closed. We still
+     * hold our FileCreate reference on pp here (it's released below),
+     * so SignalLock and SignalWaitQueue cannot have been torn down by
+     * GcomPortPairDestroy yet — destruction only happens when the
+     * last reference drops to zero. Signalling before we call Release
+     * is safe; signalling *after* would race with companion teardown
+     * that decrements the final reference in parallel.
      */
+    if (pp->Active) {
+        GcomSignalChanged(pp, GCOM_CHANGED_COM_CLOSE);
+    }
 
     /* Drop the reference taken in FileCreate. */
     GcomPortPairRelease(pp);
@@ -657,11 +663,16 @@ GcomComEvtIoctl(
     UNREFERENCED_PARAMETER(OutputBufferLength);
     UNREFERENCED_PARAMETER(InputBufferLength);
 
+    extern VOID GcomDiagWriteStatus(_In_ PCWSTR ValueName,
+                                    _In_ ULONG Status);
+    GcomDiagWriteStatus(L"ComIoctl_LastCode", IoControlCode);
+
     WDFFILEOBJECT fileObj = WdfRequestGetFileObject(Request);
     PGCOM_FILE_CTX fileCtx = GcomGetFileContext(fileObj);
     PGCOM_PORT_PAIR pp = fileCtx->PortPair;
 
     if (!pp || !pp->Active) {
+        GcomDiagWriteStatus(L"ComIoctl_NotConnected", IoControlCode);
         WdfRequestComplete(Request, STATUS_DEVICE_NOT_CONNECTED);
         return;
     }
@@ -691,15 +702,23 @@ GcomComEvtIoctl(
 
     case IOCTL_SERIAL_GET_BAUD_RATE:
     {
+        extern VOID GcomDiagWriteStatus(_In_ PCWSTR ValueName,
+                                        _In_ ULONG Status);
+        GcomDiagWriteStatus(L"Ioctl_GetBaud_Entered", 1);
         PSERIAL_BAUD_RATE br;
+        size_t outLen = 0;
         status = WdfRequestRetrieveOutputBuffer(Request, sizeof(SERIAL_BAUD_RATE),
-                                                 (PVOID*)&br, NULL);
+                                                 (PVOID*)&br, &outLen);
+        GcomDiagWriteStatus(L"Ioctl_GetBaud_RetrieveSt", (ULONG)status);
+        GcomDiagWriteStatus(L"Ioctl_GetBaud_OutLen", (ULONG)outLen);
         if (NT_SUCCESS(status)) {
             WdfSpinLockAcquire(pp->SignalLock);
             br->BaudRate = pp->SignalState.BaudRate;
             WdfSpinLockRelease(pp->SignalLock);
+            GcomDiagWriteStatus(L"Ioctl_GetBaud_WroteBaud", br->BaudRate);
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
                                               sizeof(SERIAL_BAUD_RATE));
+            GcomDiagWriteStatus(L"Ioctl_GetBaud_Completed", 4);
         } else {
             WdfRequestComplete(Request, status);
         }

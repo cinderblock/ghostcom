@@ -80,14 +80,15 @@ function readOverlapped(hCom: unknown, size: number, timeoutMs: number): Buffer 
 // ── Serial IOCTL codes (ntddser.h, FILE_DEVICE_SERIAL_PORT=0x1b) ─────────────
 // CTL_CODE(DevType, Fn, Method=0, Access=0) = (DevType<<16)|(Fn<<2)|0
 const ctlCode = (fn: number) => (0x1b << 16) | (fn << 2);
-const IOCTL_SET_WAIT_MASK  = ctlCode(7);   // IOCTL_SERIAL_SET_WAIT_MASK
-const IOCTL_WAIT_ON_MASK   = ctlCode(8);   // IOCTL_SERIAL_WAIT_ON_MASK
+// Function numbers from ntddser.h (Windows Kits)
 const IOCTL_SET_BAUD_RATE  = ctlCode(1);   // IOCTL_SERIAL_SET_BAUD_RATE
-const IOCTL_GET_BAUD_RATE  = ctlCode(2);   // IOCTL_SERIAL_GET_BAUD_RATE
 const IOCTL_SET_LINE_CTRL  = ctlCode(3);   // IOCTL_SERIAL_SET_LINE_CONTROL
-const IOCTL_GET_LINE_CTRL  = ctlCode(4);   // IOCTL_SERIAL_GET_LINE_CONTROL
+const IOCTL_SET_WAIT_MASK  = ctlCode(17);  // IOCTL_SERIAL_SET_WAIT_MASK
+const IOCTL_WAIT_ON_MASK   = ctlCode(18);  // IOCTL_SERIAL_WAIT_ON_MASK
 const IOCTL_PURGE          = ctlCode(19);  // IOCTL_SERIAL_PURGE
-const IOCTL_GET_COMMSTATUS = ctlCode(20);  // IOCTL_SERIAL_GET_COMMSTATUS
+const IOCTL_GET_BAUD_RATE  = ctlCode(20);  // IOCTL_SERIAL_GET_BAUD_RATE
+const IOCTL_GET_LINE_CTRL  = ctlCode(21);  // IOCTL_SERIAL_GET_LINE_CONTROL
+const IOCTL_GET_COMMSTATUS = ctlCode(27);  // IOCTL_SERIAL_GET_COMMSTATUS
 
 // SERIAL_PURGE flags
 const SERIAL_PURGE_TXABORT = 0x0001;

@@ -454,6 +454,80 @@ Added `GCOM_PDO_CTX` with `PortNumber` and `PortNameWritten` fields,
 declared via `WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(GCOM_PDO_CTX,
 GcomGetPdoContext)`. In `GcomEvtChildListCreateDevice`, after
 `WdfDeviceCreate` returns the PDO, attach the context and stash
+`portNumber` for later use by the PnP preprocess hook.
+
+---
+
+## 2026-04-19 — v0.48.3: 23/23 core tests passing
+
+**Final tally: 23/23 core tests green.** (e2e 8/8, compat 5/5,
+enumeration 5/5, robustness 5/5. The serialport-pkg Bun regression
+tests are a separate known Bun-platform issue, not our driver.)
+
+The three remaining failures from v0.48 resolved as follows:
+
+### Fix 1 — compat `SetBaudRate/GetBaudRate` (NOT a driver bug)
+
+**Root cause: the test file had WRONG IOCTL function numbers.**
+`tests/compat.test.ts` defined `IOCTL_GET_BAUD_RATE = ctlCode(2)` but
+the real function number from `ntddser.h` is 20. Function 2 is
+`IOCTL_SERIAL_SET_QUEUE_SIZE`, which our driver handles as a no-op
+completing with `STATUS_SUCCESS` and `Information=0` — perfectly
+matching the observed `nb2=0` failure. Several other test constants
+were also wrong (`SET_WAIT_MASK=7`→17, `WAIT_ON_MASK=8`→18,
+`GET_LINE_CTRL=4`→21, `GET_COMMSTATUS=20`→27).
+
+The existing passing WaitCommEvent test using old wrong function 7
+(SET_TIMEOUTS) was apparently completing through a fallback path
+where DeviceIoControl still signaled the overlapped event despite
+the IOCTL mismatch. With the fix, all 5 compat tests use correct
+IOCTL codes and pass cleanly.
+
+**Red herring that wasted debugging time**: diagnostic
+`ComIoctl_LastCode` reg entry wasn't appearing after DeviceIoControl.
+Theory about the PDO in Ports class hijacking IOCTLs was wrong — the
+reason the diag didn't fire was stale driver state from the previous
+reboot. Once the driver was properly loaded (v0.48.2+) and ports were
+recreated, diagnostics fired correctly. Also: `ctlCode(2)` mapped to
+our `IOCTL_SERIAL_SET_QUEUE_SIZE` handler which DOES fire — but the
+diag was placed at the top of `GcomComEvtIoctl`, and I was looking
+at the wrong registry time window (after-cleanup, which wipes the
+live PDO context and zeroes the diag section).
+
+### Fix 2 — e2e `setSignals: companion DTR` round-trip
+
+**Code fix was already committed to `companion.c` pre-v0.48.3:**
+`IOCTL_GCOM_GET_SIGNALS` overrides `output->DtrState` / `.RtsState`
+with `pp->CompDtr` / `pp->CompRts` so the companion round-trip
+(setSignals → getSignals) reads back what it asserted rather than
+reading the COM side's own DTR/RTS. Fix was in source but hadn't
+been rebuilt/reinstalled as of the last session.
+
+### Fix 3 — e2e `signal: COM close/reopen → COM_CLOSE`
+
+**Code fix was already committed to `comport.c` pre-v0.48.3:**
+`GcomComEvtFileClose` now calls `GcomSignalChanged(pp,
+GCOM_CHANGED_COM_CLOSE)` while still holding the FileCreate
+reference, before releasing it. The signal lock can't be torn down
+yet because we still hold one reference. Rebuilding v0.48.3 picked
+up this fix too.
+
+### v0.48.3 install cadence
+
+Bump `DriverVer` (0.48.2.0 → 0.48.3.0), build via
+`scripts\build-driver.ps1 -Sign`, then
+`scripts\install-driver.ps1`, then
+`Disable-PnpDevice ROOT\SYSTEM\0001 -Confirm:$false` then
+`Enable-PnpDevice`. Do NOT reinstall `ghostcom-port.inf` — the
+original oem3.inf from v0.48 is still correct and doesn't change.
+
+### Reference — test file constants matter
+
+Before blaming the driver for IOCTL return values, **verify the test
+is sending the right IOCTL code**. Windows is permissive: unknown
+IOCTLs get silently completed somewhere in the stack and return
+STATUS_SUCCESS with zero Information. It LOOKS like the driver is
+broken; really the test is sending gibberish.
 `portNumber`. In `GcomPdoPnpPreprocessIrp` on the first `QUERY_ID`:
 
 ```c

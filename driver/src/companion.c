@@ -450,6 +450,19 @@ GcomCompEvtIoctl(
         if (NT_SUCCESS(status)) {
             WdfSpinLockAcquire(pp->SignalLock);
             *output = pp->SignalState;
+            /*
+             * From the companion's perspective, DtrState/RtsState are
+             * its OWN output lines — those are stored in pp->CompDtr
+             * and pp->CompRts. The SignalState.DtrState / .RtsState
+             * fields represent the COM side's DTR/RTS (set by the
+             * app that opened \\.\COMn). A companion userspace call
+             * to getSignals() expects to read back what it last
+             * asserted via setSignals(), not what the COM side is
+             * signaling. Overwrite with CompDtr/CompRts so the round
+             * trip works symmetrically on both ends of the pair.
+             */
+            output->DtrState = pp->CompDtr ? 1 : 0;
+            output->RtsState = pp->CompRts ? 1 : 0;
             WdfSpinLockRelease(pp->SignalLock);
             WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS,
                                               sizeof(GCOM_SIGNAL_STATE));
