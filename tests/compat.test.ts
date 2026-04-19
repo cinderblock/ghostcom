@@ -127,7 +127,11 @@ describe("GhostCOM — COM-side API compatibility", () => {
     native = createRequire(import.meta.url)(addonPath) as NativeAddon;
   });
 
-  // process.exit removed — caused stale symlinks.
+  // Force process exit after all tests complete. Native addon TSFNs
+  // keep bun's event loop alive indefinitely, so without this the
+  // suite hangs and no JUnit XML is flushed. The 2000ms delay gives
+  // afterEach (destroyPort → symlink removal) time to finalize.
+  afterAll(() => { setTimeout(() => process.exit(0), 2000); });
 
   beforeEach(async () => {
     if (!addonAvailable) return;

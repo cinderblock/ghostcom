@@ -42,6 +42,12 @@
     <WDKContentRoot Condition="'$(WDKContentRoot)' == ''">$(MSBuildProgramFiles32)\Windows Kits\10\</WDKContentRoot>
     <WDKVersion>10.0.26100.0</WDKVersion>
     <KmdfIncludeVersion>1.33</KmdfIncludeVersion>
+
+    <!-- Force output extension to .sys. Cpp.props resets TargetExt to
+         .dll for DynamicLibrary configs, so it must be set AFTER the
+         props import to stick. -->
+    <TargetName>ghostcom</TargetName>
+    <TargetExt>.sys</TargetExt>
   </PropertyGroup>
 
   <ItemDefinitionGroup>

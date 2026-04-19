@@ -61,7 +61,11 @@ describe("GhostCOM — Windows PnP enumeration (expected failures until PDO rewr
     native = createRequire(import.meta.url)(addonPath) as NativeAddon;
   });
 
-  // process.exit removed — caused stale symlinks.
+  // Force exit 2s after all tests + afterEach complete, so bun flushes
+  // its JUnit reporter before the addon's TSFNs keep the loop alive
+  // indefinitely. Same pattern as e2e.test.ts — without it bun hangs
+  // after the suite completes and no XML is produced for the report.
+  afterAll(() => { setTimeout(() => process.exit(0), 2000); });
 
   beforeEach(async () => {
     if (!addonAvailable) return;

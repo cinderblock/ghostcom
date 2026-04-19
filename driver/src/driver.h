@@ -59,6 +59,17 @@ typedef struct _GCOM_PORT_PAIR   GCOM_PORT_PAIR,   *PGCOM_PORT_PAIR;
 typedef struct _GCOM_DEVICE_CTX  GCOM_DEVICE_CTX,  *PGCOM_DEVICE_CTX;
 
 /*
+ * Identification description passed via the FDO's default child list.
+ * Size used in both WDF_CHILD_LIST_CONFIG_INIT (driver.c) and
+ * WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER_INIT (comport.c) MUST
+ * agree — WDF memcpys this many bytes when the child is reported.
+ */
+typedef struct _GCOM_CHILD_ID {
+    WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER Header;
+    ULONG PortNumber;
+} GCOM_CHILD_ID, *PGCOM_CHILD_ID;
+
+/*
  * Sentinel value stored in Ports[] to reserve a slot during port pair
  * creation.  All table scans must use GCOM_PORT_IS_VALID() before
  * dereferencing a Ports[] entry.

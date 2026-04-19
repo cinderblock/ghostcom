@@ -39,15 +39,28 @@ $projectFile = Join-Path $driverDir "ghostcom.vcxproj"
 
 # ── Check prerequisites ───────────────────────────────────────
 
-# Find MSBuild
+# Find MSBuild. -latest alone misses BuildTools; -products * includes them.
 $msbuild = $null
 $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 if (Test-Path $vsWhere) {
-    $vsPath = & $vsWhere -latest -property installationPath 2>$null
+    $vsPath = & $vsWhere -latest -products * -property installationPath 2>$null
     if ($vsPath) {
         $msbuild = Get-ChildItem "$vsPath\MSBuild" -Recurse -Filter "MSBuild.exe" |
                    Where-Object { $_.FullName -match "amd64" } |
                    Select-Object -First 1 -ExpandProperty FullName
+    }
+}
+
+# Fallback: probe well-known BuildTools path directly.
+if (-not $msbuild) {
+    $candidates = @(
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe",
+        "${env:ProgramFiles}\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe",
+        "${env:ProgramFiles}\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe"
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path $c) { $msbuild = $c; break }
     }
 }
 

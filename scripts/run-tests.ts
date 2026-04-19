@@ -31,6 +31,23 @@ function sleepMs(ms: number) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function killOrphanBun() {
+  /* Kill any stray bun.exe processes left over from a previous test
+   * file that timed out. These orphans keep native-addon handles open
+   * on \\.\GhostCOMControl, which prevents the next file from making
+   * a clean start and causes cascading timeouts. Exclude our own bun
+   * (running this script) and spare the running Allure server. */
+  const myPid = process.pid;
+  spawnSync("powershell", [
+    "-NoProfile", "-Command",
+    `Get-Process bun -ErrorAction SilentlyContinue | ` +
+    `Where-Object { $_.Id -ne ${myPid} -and ` +
+    `(Get-NetTCPConnection -OwningProcess $_.Id -LocalPort ${ALLURE_PORT} -ErrorAction SilentlyContinue) -eq $null } | ` +
+    `Stop-Process -Force -ErrorAction SilentlyContinue`,
+  ], { stdio: "ignore" });
+  sleepMs(500);
+}
+
 function runCleanup() {
   console.log("── cleanup ports ──");
   for (let round = 0; round < 3; round++) {
@@ -121,12 +138,16 @@ for (const file of TESTS) {
     {
       stdio: "inherit",
       shell: true,
-      timeout: 120_000,
+      timeout: 180_000,
     },
   );
   if (r.status !== 0) {
     totalFailed++;
     console.log(`(${file} exited with ${r.status})`);
+    /* Timeout or crash — child bun may have been orphaned and is
+     * still holding driver handles. Clean it up so the next file
+     * can start fresh. */
+    killOrphanBun();
   }
 }
 

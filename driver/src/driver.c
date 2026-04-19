@@ -13,8 +13,49 @@
 #define TraceEvents(level, flag, msg, ...) \
     KdPrintEx((DPFLTR_DEFAULT_ID, DPFLTR_INFO_LEVEL, "ghostcom: " msg "\n", ##__VA_ARGS__))
 
+/*
+ * Diagnostic helper — writes a DWORD status to
+ *   HKLM\SOFTWARE\GhostCOMDiag\<ValueName>
+ * so we can inspect driver state from user-mode without needing a
+ * kernel debugger attached.
+ */
+VOID
+GcomDiagWriteStatus(_In_ PCWSTR ValueName, _In_ ULONG Status)
+{
+    UNICODE_STRING keyPath;
+    RtlInitUnicodeString(&keyPath, L"\\Registry\\Machine\\SOFTWARE\\GhostCOMDiag");
 
-/* ── Child list callback (stub for shadow PDOs) ──────────────── */
+    OBJECT_ATTRIBUTES keyAttr;
+    InitializeObjectAttributes(&keyAttr, &keyPath,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL, NULL);
+    HANDLE keyHandle;
+    NTSTATUS st = ZwCreateKey(&keyHandle, KEY_SET_VALUE, &keyAttr, 0, NULL,
+                              REG_OPTION_NON_VOLATILE, NULL);
+    if (!NT_SUCCESS(st)) return;
+
+    UNICODE_STRING valName;
+    RtlInitUnicodeString(&valName, ValueName);
+    ZwSetValueKey(keyHandle, &valName, 0, REG_DWORD, &Status, sizeof(Status));
+    ZwClose(keyHandle);
+}
+
+
+/* ── Child list callback — creates the Ports-class PDO ────────── */
+
+/*
+ * We define these GUIDs locally (with explicit data init) rather than
+ * relying on INITGUID + <initguid.h>, because ntddser.h already does a
+ * DEFINE_GUID(GUID_DEVINTERFACE_COMPORT, ...) that — under INITGUID —
+ * clashes with the one we'd pull in via <initguid.h> in this TU.
+ */
+static const GUID gGuidDevclassPorts =
+    { 0x4D36E978, 0xE325, 0x11CE,
+      { 0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18 } };
+
+static const GUID gGuidDevinterfaceComport =
+    { 0x86E0D1E0, 0x8089, 0x11D0,
+      { 0x9C, 0xE4, 0x08, 0x00, 0x3E, 0x30, 0x1F, 0x73 } };
 
 static NTSTATUS
 GcomEvtChildListCreateDevice(
@@ -25,48 +66,144 @@ GcomEvtChildListCreateDevice(
 {
     UNREFERENCED_PARAMETER(ChildList);
 
+    NTSTATUS status;
+
     /* Extract port number from the identification description. */
-    struct { WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER Header; ULONG PortNumber; } *desc =
-        (void*)Id;
+    PGCOM_CHILD_ID desc = (PGCOM_CHILD_ID)Id;
     ULONG portNumber = desc->PortNumber;
 
-    /* Set hardware ID so the ghost-port INF can match. */
+    TraceEvents(0, 0, "ChildListCreateDevice: creating PDO for COM%lu", portNumber);
+    GcomDiagWriteStatus(L"Callback_Entry", portNumber);
+
+    /* Hardware ID — matches ghostcom-port.inf. */
     UNICODE_STRING hwId;
     RtlInitUnicodeString(&hwId, L"GCOM\\COMPort");
-    WdfPdoInitAddHardwareID(ChildInit, &hwId);
+    status = WdfPdoInitAddHardwareID(ChildInit, &hwId);
+    GcomDiagWriteStatus(L"Callback_AddHwId_Status", (ULONG)status);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(0, 0, "COM%lu: WdfPdoInitAddHardwareID failed 0x%08X",
+                    portNumber, status);
+        return status;
+    }
 
-    /* Unique instance ID. */
+    /* Compatible ID so the INF-less install path also works. */
+    UNICODE_STRING compatId;
+    RtlInitUnicodeString(&compatId, L"GCOM\\COMPort");
+    WdfPdoInitAddCompatibleID(ChildInit, &compatId);
+
+    /* Unique instance ID (the port number). */
     WCHAR instBuf[16];
     UNICODE_STRING instId;
     RtlStringCbPrintfW(instBuf, sizeof(instBuf), L"%lu", portNumber);
     RtlInitUnicodeString(&instId, instBuf);
-    WdfPdoInitAssignInstanceID(ChildInit, &instId);
+    status = WdfPdoInitAssignInstanceID(ChildInit, &instId);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(0, 0, "COM%lu: WdfPdoInitAssignInstanceID failed 0x%08X",
+                    portNumber, status);
+        return status;
+    }
 
-    /* Device description text. */
+    /* Device description text — what shows up as DeviceDesc and is used
+     * by the Ports class installer to build the FriendlyName. */
     WCHAR descBuf[80];
     UNICODE_STRING descStr, locStr;
     RtlStringCbPrintfW(descBuf, sizeof(descBuf),
                        L"GhostCOM Virtual Serial Port (COM%lu)", portNumber);
     RtlInitUnicodeString(&descStr, descBuf);
     RtlInitUnicodeString(&locStr, L"GhostCOM");
-    WdfPdoInitAddDeviceText(ChildInit, &descStr, &locStr, 0x0409);
+    status = WdfPdoInitAddDeviceText(ChildInit, &descStr, &locStr, 0x0409);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(0, 0, "COM%lu: WdfPdoInitAddDeviceText failed 0x%08X",
+                    portNumber, status);
+        return status;
+    }
     WdfPdoInitSetDefaultLocale(ChildInit, 0x0409);
 
     /* Raw device in the Ports class — no function driver needed. */
-    {
-        /* GUID_DEVCLASS_PORTS = {4D36E978-E325-11CE-BFC1-08002BE10318} */
-        GUID portsGuid = {0x4D36E978, 0xE325, 0x11CE,
-                          {0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18}};
-        WdfPdoInitAssignRawDevice(ChildInit, &portsGuid);
+    status = WdfPdoInitAssignRawDevice(ChildInit, &gGuidDevclassPorts);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(0, 0, "COM%lu: WdfPdoInitAssignRawDevice failed 0x%08X",
+                    portNumber, status);
+        return status;
+    }
+
+    /* Allow user-mode (PowerShell / Get-PnpDevice) to open file handles
+     * on the PDO. D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;BU): SYSTEM and
+     * Admins get all access, Users get read. */
+    UNICODE_STRING sddl;
+    RtlInitUnicodeString(&sddl, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;BU)");
+    status = WdfDeviceInitAssignSDDLString(ChildInit, &sddl);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(0, 0, "COM%lu: WdfDeviceInitAssignSDDLString failed 0x%08X",
+                    portNumber, status);
+        return status;
     }
 
     /* Create the PDO. */
     WDF_OBJECT_ATTRIBUTES attr;
     WDF_OBJECT_ATTRIBUTES_INIT(&attr);
     WDFDEVICE pdoDevice;
-    NTSTATUS status = WdfDeviceCreate(&ChildInit, &attr, &pdoDevice);
+    status = WdfDeviceCreate(&ChildInit, &attr, &pdoDevice);
+    GcomDiagWriteStatus(L"Callback_PdoCreate_Status", (ULONG)status);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(0, 0, "COM%lu: WdfDeviceCreate (PDO) failed 0x%08X",
+                    portNumber, status);
+        return status;
+    }
 
-    return status;
+    /* Register the serial-port device interface. This is what makes
+     * the PDO discoverable via GUID_DEVINTERFACE_COMPORT and therefore
+     * visible to Get-CimInstance Win32_PnPEntity and SetupDi*. */
+    NTSTATUS ifStatus = WdfDeviceCreateDeviceInterface(
+        pdoDevice, &gGuidDevinterfaceComport, NULL);
+    GcomDiagWriteStatus(L"Callback_Interface_Status", (ULONG)ifStatus);
+    if (!NT_SUCCESS(ifStatus)) {
+        TraceEvents(0, 0,
+            "COM%lu: WdfDeviceCreateDeviceInterface(COMPORT) failed 0x%08X",
+            portNumber, ifStatus);
+        /* Non-fatal — PDO still exists. */
+    }
+
+    /* Write PortName = "COM<N>" to the device's Device Parameters key.
+     * Standard convention used by every Windows serial-port stack; the
+     * Ports class installer reads it to form the FriendlyName
+     * ("<DeviceDesc> (COM<N>)") and MSSerial/serenum also read it. */
+    {
+        WDFKEY devParamsKey = NULL;
+        NTSTATUS rkSt = WdfDeviceOpenRegistryKey(
+            pdoDevice, PLUGPLAY_REGKEY_DEVICE,
+            KEY_SET_VALUE, WDF_NO_OBJECT_ATTRIBUTES, &devParamsKey);
+        GcomDiagWriteStatus(L"Callback_RegKey_Status", (ULONG)rkSt);
+        if (NT_SUCCESS(rkSt) && devParamsKey != NULL) {
+            UNICODE_STRING portNameValName;
+            RtlInitUnicodeString(&portNameValName, L"PortName");
+            WCHAR portNameBuf[16];
+            UNICODE_STRING portNameValData;
+            RtlStringCbPrintfW(portNameBuf, sizeof(portNameBuf),
+                               L"COM%lu", portNumber);
+            RtlInitUnicodeString(&portNameValData, portNameBuf);
+            NTSTATUS wrSt = WdfRegistryAssignUnicodeString(
+                devParamsKey, &portNameValName, &portNameValData);
+            GcomDiagWriteStatus(L"Callback_PortName_Status", (ULONG)wrSt);
+            if (!NT_SUCCESS(wrSt)) {
+                TraceEvents(0, 0,
+                    "COM%lu: WdfRegistryAssignUnicodeString(PortName) failed 0x%08X",
+                    portNumber, wrSt);
+            }
+            WdfRegistryClose(devParamsKey);
+        } else {
+            TraceEvents(0, 0,
+                "COM%lu: WdfDeviceOpenRegistryKey(Device params) failed 0x%08X",
+                portNumber, rkSt);
+        }
+    }
+
+    TraceEvents(0, 0, "ChildListCreateDevice: PDO created for COM%lu OK",
+                portNumber);
+    GcomDiagWriteStatus(L"Callback_Final_Status", (ULONG)STATUS_SUCCESS);
+    GcomDiagWriteStatus(L"Callback_Completed", portNumber);
+
+    return STATUS_SUCCESS;
 }
 
 
@@ -230,10 +367,17 @@ GcomEvtDeviceAdd(
         WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnpCallbacks);
     }
 
-    /* ── Configure child list for shadow PDOs ────────────────── */
+    /* ── Configure child list for shadow PDOs ────────────────── *
+     * The size passed here is the TOTAL size of the identification
+     * description (header + driver-defined fields), not just the
+     * driver-defined fields. WDF memcpys exactly this many bytes
+     * when a driver later calls WdfChildListAddOrUpdateChildDescriptionAsPresent
+     * — passing sizeof(ULONG) here clips everything after the first 4
+     * bytes of the HEADER, which results in garbage identifications and
+     * the PDO never actually showing up in PnP. */
     {
         WDF_CHILD_LIST_CONFIG clc;
-        WDF_CHILD_LIST_CONFIG_INIT(&clc, sizeof(ULONG),
+        WDF_CHILD_LIST_CONFIG_INIT(&clc, sizeof(GCOM_CHILD_ID),
                                     GcomEvtChildListCreateDevice);
         WdfFdoInitSetDefaultChildListConfig(DeviceInit, &clc,
                                              WDF_NO_OBJECT_ATTRIBUTES);

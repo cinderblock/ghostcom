@@ -282,61 +282,55 @@ GcomComPortCreate(
     /* ── Report shadow child to PnP via the child list ────────
      *
      * The child list callback (GcomEvtChildListCreateDevice) creates
-     * the actual PDO. Here we just tell WDF "this child exists".
+     * the actual PDO that appears in the Ports class in Device Manager.
+     *
+     * IMPORTANT: Do NOT write diagnostic REG_DWORD values into SERIALCOMM.
+     * .NET's [System.IO.Ports.SerialPort]::GetPortNames() enumerates that
+     * key and casts every value to String — a single REG_DWORD entry
+     * makes the whole call throw InvalidCastException, hiding every COM
+     * port on the system.
      */
     {
-        WDFCHILDLIST childList = WdfFdoGetDefaultChildList(DevCtx->FdoDevice);
+        /* Diagnostic registry helper from driver.c. */
+        extern VOID GcomDiagWriteStatus(PCWSTR, ULONG);
 
-        /* Diagnostic: write whether we got a child list at all. */
-        {
-            UNICODE_STRING rp;
-            RtlInitUnicodeString(&rp, L"\\Registry\\Machine\\HARDWARE\\DEVICEMAP\\SERIALCOMM");
-            OBJECT_ATTRIBUTES oa;
-            InitializeObjectAttributes(&oa, &rp, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-            HANDLE kh;
-            if (NT_SUCCESS(ZwOpenKey(&kh, KEY_SET_VALUE, &oa))) {
-                UNICODE_STRING vn;
-                RtlInitUnicodeString(&vn, L"CHILDLIST_PTR");
-                ULONG val = (childList != NULL) ? 1 : 0;
-                ZwSetValueKey(kh, &vn, 0, REG_DWORD, &val, sizeof(val));
-                ZwClose(kh);
-            }
-        }
+        WDFCHILDLIST childList = WdfFdoGetDefaultChildList(DevCtx->FdoDevice);
+        GcomDiagWriteStatus(L"AddChild_HasList", childList != NULL ? 1 : 0);
 
         if (childList) {
-            WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER idHeader;
-            WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER_INIT(&idHeader, sizeof(ULONG) + sizeof(WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER));
-
-            /* Store port number right after the header. */
-            struct {
-                WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER Header;
-                ULONG PortNumber;
-            } idDesc;
+            GCOM_CHILD_ID idDesc;
             WDF_CHILD_IDENTIFICATION_DESCRIPTION_HEADER_INIT(&idDesc.Header, sizeof(idDesc));
             idDesc.PortNumber = PortNumber;
+            GcomDiagWriteStatus(L"AddChild_DescSize", (ULONG)sizeof(idDesc));
+            GcomDiagWriteStatus(L"AddChild_PortNumber", PortNumber);
 
+            /* Simple dynamic add — no scan wrapping. For dynamic
+             * child lists, AddOrUpdateChildDescriptionAsPresent on
+             * its own drives WDF to call IoInvalidateDeviceRelations
+             * and trigger PnP to query + materialize the new PDO. */
             NTSTATUS clSt = WdfChildListAddOrUpdateChildDescriptionAsPresent(
                 childList, &idDesc.Header, NULL);
-
-            /* Write status to registry for diagnostics. */
-            {
-                UNICODE_STRING regPath;
-                RtlInitUnicodeString(&regPath,
-                    L"\\Registry\\Machine\\HARDWARE\\DEVICEMAP\\SERIALCOMM");
-                OBJECT_ATTRIBUTES ka;
-                InitializeObjectAttributes(&ka, &regPath,
-                    OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-                HANDLE kh;
-                if (NT_SUCCESS(ZwOpenKey(&kh, KEY_SET_VALUE, &ka))) {
-                    WCHAR vn[32];
-                    UNICODE_STRING vnStr;
-                    RtlStringCbPrintfW(vn, sizeof(vn), L"PDO_STATUS_%lu", PortNumber);
-                    RtlInitUnicodeString(&vnStr, vn);
-                    ULONG val = (ULONG)clSt;
-                    ZwSetValueKey(kh, &vnStr, 0, REG_DWORD, &val, sizeof(val));
-                    ZwClose(kh);
-                }
+            GcomDiagWriteStatus(L"AddChild_AddStatus", (ULONG)clSt);
+            if (!NT_SUCCESS(clSt)) {
+                TraceEvents(0, 0, "COM%lu: child list add failed 0x%08X",
+                            PortNumber, clSt);
             }
+
+            /* Explicit kick. Some WDF versions / scenarios don't
+             * automatically invalidate after AddOrUpdate outside
+             * BeginScan/EndScan, so do it ourselves as a belt-and-
+             * suspenders. */
+            PDEVICE_OBJECT physDev =
+                WdfDeviceWdmGetPhysicalDevice(DevCtx->FdoDevice);
+            GcomDiagWriteStatus(L"AddChild_HasPhysDev",
+                                physDev != NULL ? 1 : 0);
+            if (physDev) {
+                IoInvalidateDeviceRelations(physDev, BusRelations);
+                GcomDiagWriteStatus(L"AddChild_InvalidatedRelations", 1);
+            }
+        } else {
+            TraceEvents(0, 0, "COM%lu: WdfFdoGetDefaultChildList returned NULL",
+                        PortNumber);
         }
     }
 

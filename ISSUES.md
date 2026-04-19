@@ -88,6 +88,37 @@
   `\\Device\\GCOMControl` already exists. Should check for existing devices before
   creating.
 
+- [ ] **`createPort` succeeds in JS but no COM child PDO appears in Device Manager**:
+  Running `examples/echo.ts 10` prints `✓ COM10 is ready` and the bun process stays
+  alive holding the port, but the OS does not see a real COM port:
+
+  - Device Manager shows **"GhostCOM Virtual COM Port Controller"** under *System
+    devices* (InstanceId `ROOT\SYSTEM\0001`, service `GhostCOM`, status OK), but
+    the **Ports (COM & LPT)** class is empty.
+  - `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM` has no entry for COM10.
+  - `Get-CimInstance Win32_SerialPort` returns nothing.
+  - Opening `COM10` via `[System.IO.Ports.SerialPort]` fails with `The port 'COM10'
+    does not exist.`
+  - No child PDOs of the root controller exist.
+
+  Meaning: the JS/addon layer reports success, but the driver is not enumerating
+  a child PDO for the COM side (or is creating one without registering the
+  `SerialPort` device interface GUID / SERIALCOMM entry that makes it appear in
+  the Ports class and be openable by external apps).
+
+  Likely culprits, in order:
+  1. Driver bug — `createPort` IOCTL reaches the driver but doesn't call
+     `WdfPdoInitAllocate` / `WdfDeviceCreate` (or is missing the device-interface
+     registration / SERIALCOMM write).
+  2. INF/hardware-ID mismatch — the child PDO is created but Windows can't match
+     a driver section in `ghostcom.inf` for the Ports class install, so it
+     silently fails. Check `C:\Windows\INF\setupapi.dev.log`.
+  3. Addon returns success before the PDO is actually enumerated (no wait on
+     device-arrival notification).
+
+  **Repro**: `bun run examples/echo.ts 10`, then check `Get-PnpDevice -Class Ports`
+  and `HKLM\HARDWARE\DEVICEMAP\SERIALCOMM`.
+
 ## Build & Deploy
 
 - [ ] **Driver store caching**: `devcon install` doesn't update the driver store
