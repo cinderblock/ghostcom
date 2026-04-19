@@ -59,15 +59,35 @@ port.stream.on("error", (err) => {
   console.error("Stream error:", err.message);
 });
 
-// Graceful shutdown
-const shutdown = async () => {
+// Shutdown — cover every exit path that can still run user code.
+// The driver destroys port pairs only on explicit IOCTL, so skipping
+// `port.destroy()` leaks a zombie. SIGKILL/BSOD can't be caught;
+// `createPort()`'s zombie auto-heal cleans those up next run.
+let shuttingDown = false;
+
+const shutdown = async (code = 0) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log("\nShutting down...");
-  await port.destroy();
+  try {
+    await port.destroy();
+  } catch (err) {
+    console.error("Destroy error:", (err as Error).message);
+  }
   console.log("Done.");
-  process.exit(0);
+  process.exit(code);
 };
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", () => shutdown(0));
+process.on("SIGTERM", () => shutdown(0));
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+  void shutdown(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection:", reason);
+  void shutdown(1);
+});
 
 console.log("Press Ctrl+C to stop");

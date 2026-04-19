@@ -1,7 +1,11 @@
 import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 
-import { nativeCreatePort, nativeDestroyPort } from "./control.js";
+import {
+  nativeCreatePort,
+  nativeDestroyPort,
+  nativeListPorts,
+} from "./control.js";
 import { decodeSignalState, type RawSignalState } from "./signals.js";
 import { VirtualPortStream, type NativeStreamBinding } from "./stream.js";
 import {
@@ -247,13 +251,75 @@ export class VirtualPort extends EventEmitter<VirtualPortEventMap> {
  * port.stream.write(Buffer.from("Hello from GhostCOM!\r\n"));
  * ```
  */
+/**
+ * Win32 HRESULT for ERROR_ALREADY_EXISTS, returned by the driver's
+ * IOCTL_GCOM_CREATE_PORT when the requested COM port number is
+ * already registered (either actively held or zombied).
+ */
+const HRESULT_ALREADY_EXISTS = "0x800700B7";
+
+/**
+ * Attempt to auto-heal a port-number collision by destroying a zombie
+ * at the requested number, if one exists. Returns `true` if a zombie
+ * was found and destroyed — the caller should retry creation.
+ *
+ * Only destroys ports where `companionSideOpen === false`. A port with
+ * an open companion belongs to a live process and will never be
+ * disturbed, even if the COM side is momentarily closed.
+ */
+function tryHealZombie(portNumber: number): boolean {
+  let ports;
+  try {
+    ports = nativeListPorts();
+  } catch {
+    return false;
+  }
+
+  const stale = ports.find(
+    (p) => p.portNumber === portNumber && !p.companionSideOpen,
+  );
+  if (!stale) return false;
+
+  try {
+    nativeDestroyPort(stale.companionIndex);
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[ghostcom] healed zombie COM${portNumber} (companion=${stale.companionIndex}) left by a crashed process`,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function createPort(
   options?: CreatePortOptions,
 ): Promise<VirtualPort> {
   const requestedPort = options?.portNumber ?? 0;
+  const healZombies = options?.healZombies ?? true;
 
-  // Create the port in the driver
-  const result = nativeCreatePort(requestedPort);
+  // Create the port in the driver — with one-shot retry if the
+  // requested number collides with a zombie from a crashed session.
+  // Auto-assignment (requestedPort === 0) can't benefit from healing
+  // since there's no specific number to target; in that case we let
+  // the driver's own free-port search handle it.
+  let result;
+  try {
+    result = nativeCreatePort(requestedPort);
+  } catch (err) {
+    const msg = (err as Error).message ?? "";
+    const collided = msg.includes(HRESULT_ALREADY_EXISTS);
+    if (
+      collided &&
+      healZombies &&
+      requestedPort !== 0 &&
+      tryHealZombie(requestedPort)
+    ) {
+      result = nativeCreatePort(requestedPort);
+    } else {
+      throw err;
+    }
+  }
 
   // Open the companion device and create native bindings.
   // Use createRequire since this is an ESM module loading a .node addon.

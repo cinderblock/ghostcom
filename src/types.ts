@@ -7,6 +7,22 @@ export interface CreatePortOptions {
    * If omitted, the driver will auto-assign the lowest available number.
    */
   portNumber?: number;
+
+  /**
+   * When the requested port number collides with a zombie (a port the
+   * driver still knows about but whose creator process died before
+   * `destroy()` could run), destroy the zombie and retry. Defaults to
+   * `true`.
+   *
+   * A zombie is identified by `companionSideOpen === false` — no live
+   * process is holding the companion handle. This never disturbs a
+   * port that another live process is actually using.
+   *
+   * Set to `false` to surface the original `STATUS_OBJECT_NAME_COLLISION`
+   * error without auto-recovery (e.g. if you want to inspect zombies
+   * manually with the `listPorts()` API before cleanup).
+   */
+  healZombies?: boolean;
 }
 
 /**

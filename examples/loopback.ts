@@ -118,16 +118,35 @@ port.on("signal", (state) => {
 });
 
 // --- shutdown -------------------------------------------------------------
+//
+// The driver destroys port pairs only on an explicit IOCTL, never on
+// last-handle-close, so any exit path that skips `port.destroy()`
+// leaves a zombie. We cover every reachable path here. SIGKILL and
+// BSOD are unreachable; `createPort()`'s zombie auto-heal cleans those
+// up on the next run.
 
-const shutdown = async () => {
+let shuttingDown = false;
+
+const shutdown = async (code = 0) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log("\nShutting down...");
   try {
     await port.destroy();
   } catch (err) {
     console.error("Destroy error:", (err as Error).message);
   }
-  process.exit(0);
+  process.exit(code);
 };
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", () => shutdown(0));
+process.on("SIGTERM", () => shutdown(0));
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+  void shutdown(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection:", reason);
+  void shutdown(1);
+});

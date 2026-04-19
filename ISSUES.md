@@ -78,6 +78,37 @@
 
   **Note**: fix is in source; requires driver rebuild to take effect.
 
+- [ ] **Port pair leaks on abnormal process exit (driver lifecycle is IOCTL-driven,
+  not handle-close-driven)**: If the process that created a port dies without calling
+  `VirtualPort.destroy()` — SIGKILL, `TaskManager → End task`, Claude Code's
+  `TaskStop`, or a crash before the shutdown handlers run — the kernel driver keeps
+  the port pair registered forever. The companion handle closes when the OS tears
+  down the dead process, which flips `CompanionSideOpen → false` via
+  `GcomCompEvtFileClose` (`driver/src/companion.c:64-87`), but the close path
+  **does not destroy the port pair** — it only updates the flag. Port destruction
+  happens exclusively via `IOCTL_GCOM_DESTROY_PORT` in `control.c` →
+  `GcomHandleDestroyPort`. Result: stale entry in the port table, stale
+  `\DosDevices\COM<N>` symlink, stale `SERIALCOMM` registry entry, PnP device node
+  stuck with status "OK".
+
+  **Userspace mitigations** (applied):
+  - `scripts/check-zombies.ts` — lists and optionally destroys zombies (ports with
+    `companionSideOpen === false`).
+  - `createPort({ healZombies: true })` (default) — on `STATUS_OBJECT_NAME_COLLISION`
+    for a specific port number, auto-destroys a colliding zombie and retries once.
+  - `examples/*.ts` — `uncaughtException` / `unhandledRejection` handlers now run
+    `port.destroy()` before exit.
+
+  **Real fix** (kernel): make port destruction refcount-driven. When both
+  `ComSideOpen` and `CompanionSideOpen` drop to false AND `GcomPortPairRelease`
+  brings the pair refcount to zero, `GcomPortPairDestroy` should run
+  automatically — either directly from the close callback or via a work item
+  queued by it. The explicit `IOCTL_GCOM_DESTROY_PORT` path becomes redundant for
+  crash recovery (but remains useful as an active-tenant "kick this port right
+  now" request). See `driver/src/companion.c:64-87`, `driver/src/comport.c:69-98`,
+  `driver/src/portpair.c:338-445` (existing `GcomPortPairDestroy`), and
+  `driver/src/portpair.c:652-673` (refcount).
+
 - [ ] **`sc stop` returns error 1052**: By design for PnP kernel drivers — `sc stop`
   doesn't work. Must use `devcon remove` instead. Should document this clearly and
   provide a helper command/script.
