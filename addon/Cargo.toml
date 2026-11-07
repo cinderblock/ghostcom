@@ -7,11 +7,11 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-napi = { version = "2", features = ["napi9"] }
-napi-derive = "2"
+napi = { version = "3", features = ["napi9"] }
+napi-derive = "3"
 
 [dependencies.windows]
-version = "0.58"
+version = "0.62"
 features = [
   "Win32_Foundation",
   "Win32_Storage_FileSystem",
