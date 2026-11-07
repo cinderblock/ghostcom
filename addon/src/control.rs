@@ -39,8 +39,7 @@ pub struct PortInfoJs {
 /// `port_number`: 0 for auto-assignment, or a specific COM port number.
 #[napi]
 pub fn create_port(port_number: u32) -> Result<CreatePortResult> {
-    let handle = open_device_sync(CONTROL_DEVICE_PATH)
-        .map_err(|_| error::driver_not_found())?;
+    let handle = open_device_sync(CONTROL_DEVICE_PATH).map_err(|_| error::driver_not_found())?;
 
     let request = GcomCreatePortRequest { port_number };
     let mut response = GcomCreatePortResponse::default();
@@ -56,7 +55,9 @@ pub fn create_port(port_number: u32) -> Result<CreatePortResult> {
         )
     };
 
-    unsafe { let _ = CloseHandle(handle); }
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
 
     result?;
 
@@ -71,8 +72,7 @@ pub fn create_port(port_number: u32) -> Result<CreatePortResult> {
 /// Sends IOCTL_GCOM_DESTROY_PORT to the control device.
 #[napi]
 pub fn destroy_port(companion_index: u32) -> Result<()> {
-    let handle = open_device_sync(CONTROL_DEVICE_PATH)
-        .map_err(|_| error::driver_not_found())?;
+    let handle = open_device_sync(CONTROL_DEVICE_PATH).map_err(|_| error::driver_not_found())?;
 
     let request = GcomDestroyPortRequest { companion_index };
 
@@ -87,7 +87,9 @@ pub fn destroy_port(companion_index: u32) -> Result<()> {
         )
     };
 
-    unsafe { let _ = CloseHandle(handle); }
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
 
     result?;
     Ok(())
@@ -98,13 +100,13 @@ pub fn destroy_port(companion_index: u32) -> Result<()> {
 /// Sends IOCTL_GCOM_LIST_PORTS to the control device.
 #[napi]
 pub fn list_ports() -> Result<Vec<PortInfoJs>> {
-    let handle = open_device_sync_read(CONTROL_DEVICE_PATH)
-        .map_err(|_| error::driver_not_found())?;
+    let handle =
+        open_device_sync_read(CONTROL_DEVICE_PATH).map_err(|_| error::driver_not_found())?;
 
     // Allocate enough space for the header + up to 64 port entries.
     const MAX_PORTS: usize = 64;
-    let buf_size = mem::size_of::<GcomListPortsHeader>()
-        + MAX_PORTS * mem::size_of::<GcomPortInfo>();
+    let buf_size =
+        mem::size_of::<GcomListPortsHeader>() + MAX_PORTS * mem::size_of::<GcomPortInfo>();
     let mut buffer = vec![0u8; buf_size];
 
     let bytes_returned = unsafe {
@@ -118,7 +120,9 @@ pub fn list_ports() -> Result<Vec<PortInfoJs>> {
         )
     };
 
-    unsafe { let _ = CloseHandle(handle); }
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
 
     let bytes_returned = bytes_returned?;
 
@@ -126,9 +130,7 @@ pub fn list_ports() -> Result<Vec<PortInfoJs>> {
         return Ok(vec![]);
     }
 
-    let header = unsafe {
-        &*(buffer.as_ptr() as *const GcomListPortsHeader)
-    };
+    let header = unsafe { &*(buffer.as_ptr() as *const GcomListPortsHeader) };
 
     let count = header.count as usize;
     let entries_ptr = unsafe {
@@ -154,7 +156,9 @@ pub fn list_ports() -> Result<Vec<PortInfoJs>> {
 pub fn is_driver_available() -> bool {
     match open_device_sync_read(CONTROL_DEVICE_PATH) {
         Ok(handle) => {
-            unsafe { let _ = CloseHandle(handle); }
+            unsafe {
+                let _ = CloseHandle(handle);
+            }
             true
         }
         Err(_) => false,
@@ -185,7 +189,9 @@ pub fn get_driver_version() -> Result<Option<String>> {
         )
     };
 
-    unsafe { let _ = CloseHandle(handle); }
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
 
     match result {
         Ok(_) => Ok(Some(format!(
@@ -219,7 +225,9 @@ pub fn check_driver_compatibility() -> Result<Option<String>> {
         )
     };
 
-    unsafe { let _ = CloseHandle(handle); }
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
 
     match result {
         Ok(_) => {

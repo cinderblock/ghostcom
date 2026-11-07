@@ -7,8 +7,8 @@
 use std::mem;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
-use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
 use windows::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent, WaitForSingleObject};
+use windows::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
 
 /// An OVERLAPPED structure with an owned event handle.
 ///
@@ -46,8 +46,7 @@ impl OverlappedEvent {
     /// overlapped operation.
     pub fn reset(&self) -> napi::Result<()> {
         unsafe {
-            ResetEvent(self.event)
-                .map_err(|e| crate::error::win_err("ResetEvent", e))?;
+            ResetEvent(self.event).map_err(|e| crate::error::win_err("ResetEvent", e))?;
         }
         Ok(())
     }
@@ -92,8 +91,7 @@ impl OverlappedEvent {
     #[allow(dead_code)]
     pub fn signal(&self) -> napi::Result<()> {
         unsafe {
-            SetEvent(self.event)
-                .map_err(|e| crate::error::win_err("SetEvent (shutdown)", e))?;
+            SetEvent(self.event).map_err(|e| crate::error::win_err("SetEvent (shutdown)", e))?;
         }
         Ok(())
     }
@@ -117,10 +115,10 @@ impl Drop for OverlappedEvent {
 
 /// Open a device by path with overlapped I/O enabled.
 pub fn open_device_overlapped(path: &str) -> napi::Result<HANDLE> {
+    use windows::Win32::Foundation::GENERIC_READ;
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
-    use windows::Win32::Foundation::GENERIC_READ;
     // GENERIC_WRITE is 0x40000000
     const GENERIC_WRITE: u32 = 0x40000000;
 
@@ -260,8 +258,8 @@ pub unsafe fn device_ioctl_overlapped(
     };
 
     match result {
-        Ok(()) => Ok(()),  // Completed synchronously
-        Err(e) if e.code() == ERROR_IO_PENDING.into() => Ok(()),  // Pending — wait on event
+        Ok(()) => Ok(()),                                        // Completed synchronously
+        Err(e) if e.code() == ERROR_IO_PENDING.into() => Ok(()), // Pending — wait on event
         Err(e) => Err(crate::error::win_err("DeviceIoControl (overlapped)", e)),
     }
 }

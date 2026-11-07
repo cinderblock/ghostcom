@@ -10,7 +10,7 @@ use std::mem;
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, ERROR_IO_PENDING};
+use windows::Win32::Foundation::{CloseHandle, ERROR_IO_PENDING, HANDLE};
 use windows::Win32::System::IO::DeviceIoControl;
 
 use crate::error::{self, SendHandle};
@@ -89,8 +89,8 @@ pub fn open_port(companion_index: u32) -> Result<NativePort> {
     let path = format!("\\\\.\\GCOM{}", companion_index);
 
     // Single overlapped handle for all operations.
-    let handle = open_device_overlapped(&path)
-        .map_err(|_| error::invalid_companion(companion_index))?;
+    let handle =
+        open_device_overlapped(&path).map_err(|_| error::invalid_companion(companion_index))?;
 
     Ok(NativePort {
         handle: SendHandle(handle),
@@ -196,7 +196,9 @@ impl NativePort {
         self.shutdown_signals();
 
         if !self.handle.is_invalid() {
-            unsafe { let _ = CloseHandle(self.handle.raw()); }
+            unsafe {
+                let _ = CloseHandle(self.handle.raw());
+            }
             self.handle = SendHandle(HANDLE::default());
         }
     }
