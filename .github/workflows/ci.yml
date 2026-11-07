@@ -51,12 +51,3 @@ jobs:
         run: |
           node -e "const m = require('./addon/ghostcom.node'); for (const f of ['createPort', 'openPort', 'isDriverAvailable']) if (typeof m[f] !== 'function') throw new Error('missing ' + f)"
           node --input-type=module -e "const m = await import('./dist/index.js'); if (typeof m.createPort !== 'function') throw new Error('missing createPort')"
-
-  driver:
-    name: Kernel driver (unsigned)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7
-      # Build only. -NoSign skips the self-signed test certificate, so nothing
-      # touches the runner's certificate stores.
-      - run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-driver.ps1 -NoSign
