@@ -21,11 +21,9 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use napi::bindgen_prelude::*;
-use napi::threadsafe_function::{
-    ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode,
-};
-use std::sync::Mutex;
+use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
+use std::sync::Mutex;
 use windows::Win32::Foundation::{ERROR_IO_PENDING, ERROR_OPERATION_ABORTED};
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
 
@@ -126,8 +124,8 @@ impl PortStreamNative {
         // and (Error) on failure — exactly the Node.js stream _write convention.
         // ctx.value is (), which converts to JS `undefined`; the write callback
         // ignores the second arg, so (null, undefined) == (null) in practice.
-        let tsfn: ThreadsafeFunction<(), ErrorStrategy::CalleeHandled> =
-            callback.create_threadsafe_function(
+        let tsfn: ThreadsafeFunction<(), ErrorStrategy::CalleeHandled> = callback
+            .create_threadsafe_function(
                 0,
                 |ctx: napi::threadsafe_function::ThreadSafeCallContext<()>| Ok(vec![ctx.value]),
             )?;
@@ -146,7 +144,10 @@ impl PortStreamNative {
                     Err(e) => {
                         // callback(Error) — failure
                         tsfn.call(
-                            Err(napi::Error::new(napi::Status::GenericFailure, e.to_string())),
+                            Err(napi::Error::new(
+                                napi::Status::GenericFailure,
+                                e.to_string(),
+                            )),
                             ThreadsafeFunctionCallMode::NonBlocking,
                         );
                     }
@@ -251,17 +252,15 @@ impl PortStreamNative {
                 Err(e) if e.code() == ERROR_IO_PENDING.into() => {
                     // Pending — wait for completion.
                     match overlapped.wait_infinite() {
-                        Ok(()) => {
-                            match overlapped.get_result(handle.raw()) {
-                                Ok(n) => bytes_read = n,
-                                Err(_) => {
-                                    if shutdown.load(Ordering::Acquire) {
-                                        break;
-                                    }
-                                    continue;
+                        Ok(()) => match overlapped.get_result(handle.raw()) {
+                            Ok(n) => bytes_read = n,
+                            Err(_) => {
+                                if shutdown.load(Ordering::Acquire) {
+                                    break;
                                 }
+                                continue;
                             }
-                        }
+                        },
                         Err(_) => {
                             if shutdown.load(Ordering::Acquire) {
                                 break;

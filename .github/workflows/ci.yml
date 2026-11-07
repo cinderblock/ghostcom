@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typescript:
+    name: TypeScript
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      # bun.lock is gitignored here, so there's no lockfile to freeze.
+      - run: bun install
+      - run: bun run typecheck
+      - run: bun run build:ts
+
+  addon:
+    name: Native addon
+    runs-on: windows-latest
+    env:
+      # .cargo/config.toml points the linker and lib paths at one xwin machine
+      # (C:/Users/test, C:/winsdk). Use the runner's MSVC toolchain instead.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: link.exe
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: addon
+      - uses: oven-sh/setup-bun@v2
+      - run: cargo fmt --manifest-path addon/Cargo.toml --check
+      - run: bun install
+      - run: bun run build:addon
+      - run: bun run build:ts
+      # No driver on the runner, so this only proves the addon loads and the
+      # package's entry point imports. The test suite needs the driver installed.
+      - name: Load the addon
+        run: |
+          node -e "const m = require('./addon/ghostcom.node'); for (const f of ['createPort', 'openPort', 'isDriverAvailable']) if (typeof m[f] !== 'function') throw new Error('missing ' + f)"
+          node --input-type=module -e "const m = await import('./dist/index.js'); if (typeof m.createPort !== 'function') throw new Error('missing createPort')"

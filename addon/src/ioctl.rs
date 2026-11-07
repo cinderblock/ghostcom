@@ -84,7 +84,7 @@ pub struct GcomCreatePortResponse {
 pub struct GcomPortInfo {
     pub port_number: u32,
     pub companion_index: u32,
-    pub com_side_open: u32,      // BOOLEAN as u32 for alignment
+    pub com_side_open: u32,       // BOOLEAN as u32 for alignment
     pub companion_side_open: u32, // BOOLEAN as u32 for alignment
 }
 
@@ -135,7 +135,7 @@ pub struct GcomSignalState {
 
     /// Modem control lines (set by COM-side application).
     pub dtr_state: u32, // BOOLEAN as u32
-    pub rts_state: u32, // BOOLEAN as u32
+    pub rts_state: u32,   // BOOLEAN as u32
     pub break_state: u32, // BOOLEAN as u32
 
     /// Flow control: SERIAL_HANDFLOW fields.
