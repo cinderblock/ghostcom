@@ -16,7 +16,7 @@ use windows::Win32::System::IO::DeviceIoControl;
 use crate::error::{self, SendHandle};
 use crate::ioctl::*;
 use crate::overlapped::{open_device_overlapped, OverlappedEvent};
-use crate::signals::{RawSignalStateJs, SignalWatcher};
+use crate::signals::{RawSignalStateJs, SignalTsfn, SignalWatcher};
 use crate::stream::PortStreamNative;
 
 /// Native port handle — wraps the companion device and provides
@@ -115,7 +115,7 @@ impl NativePort {
     /// The callback is invoked on the JS event loop thread whenever
     /// the COM-side application changes any serial configuration.
     #[napi]
-    pub fn on_signal_change(&mut self, callback: JsFunction) -> Result<()> {
+    pub fn on_signal_change(&mut self, callback: Function<'_, RawSignalStateJs, ()>) -> Result<()> {
         if self.signal_watcher.is_some() {
             return Err(napi::Error::new(
                 napi::Status::GenericFailure,
@@ -123,18 +123,13 @@ impl NativePort {
             ));
         }
 
-        // ErrorStrategy::Fatal: JS callback receives (RawSignalState) directly.
-        // CalleeHandled would produce (null, RawSignalState) and the signal
+        // Not callee-handled: JS callback receives (RawSignalState) directly.
+        // Callee-handled would produce (null, RawSignalState) and the signal
         // state would be silently discarded by the TypeScript callback.
-        let tsfn: napi::threadsafe_function::ThreadsafeFunction<
-            RawSignalStateJs,
-            napi::threadsafe_function::ErrorStrategy::Fatal,
-        > = callback.create_threadsafe_function(
-            0,
-            |ctx: napi::threadsafe_function::ThreadSafeCallContext<RawSignalStateJs>| {
-                Ok(vec![ctx.value])
-            },
-        )?;
+        let tsfn: SignalTsfn = callback
+            .build_threadsafe_function()
+            .callee_handled::<false>()
+            .build_callback(|ctx| Ok(ctx.value))?;
 
         self.signal_watcher = Some(SignalWatcher::start(self.handle, tsfn));
         Ok(())
