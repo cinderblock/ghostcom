@@ -11,12 +11,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::Status;
 use napi_derive::napi;
 
 use crate::error::SendHandle;
 use crate::ioctl::*;
 use crate::overlapped::{cancel_io, device_ioctl_overlapped, OverlappedEvent};
+
+/// Threadsafe function delivering signal snapshots to JavaScript.
+///
+/// `CalleeHandled = false` (napi v2's `ErrorStrategy::Fatal`): the JS
+/// callback receives `(RawSignalState)` directly, with no leading error
+/// argument, and an exception thrown by the callback is fatal (it surfaces
+/// as an uncaught exception).
+pub type SignalTsfn = ThreadsafeFunction<RawSignalStateJs, (), RawSignalStateJs, Status, false>;
 
 /// Raw signal state object passed to JavaScript.
 ///
@@ -89,14 +98,11 @@ impl SignalWatcher {
     /// `callback` is a ThreadsafeFunction that will be called on the
     /// JS event loop thread whenever a signal changes.
     ///
-    /// Using `ErrorStrategy::Fatal`: the JS callback receives `(RawSignalState)`
-    /// directly instead of the `(null, RawSignalState)` that `CalleeHandled`
-    /// would produce. With `CalleeHandled` the TypeScript callback's first
-    /// argument would be `null` and the signal state silently discarded.
-    pub fn start(
-        handle: SendHandle,
-        callback: ThreadsafeFunction<RawSignalStateJs, ErrorStrategy::Fatal>,
-    ) -> Self {
+    /// Not callee-handled: the JS callback receives `(RawSignalState)`
+    /// directly instead of the `(null, RawSignalState)` that a callee-handled
+    /// function would produce. With callee-handled the TypeScript callback's
+    /// first argument would be `null` and the signal state silently discarded.
+    pub fn start(handle: SendHandle, callback: SignalTsfn) -> Self {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
 
@@ -129,11 +135,7 @@ impl SignalWatcher {
     }
 
     /// The thread's main loop.
-    fn thread_main(
-        handle: SendHandle,
-        callback: ThreadsafeFunction<RawSignalStateJs, ErrorStrategy::Fatal>,
-        shutdown: Arc<AtomicBool>,
-    ) {
+    fn thread_main(handle: SendHandle, callback: SignalTsfn, shutdown: Arc<AtomicBool>) {
         let mut overlapped = match OverlappedEvent::new() {
             Ok(o) => o,
             Err(e) => {
@@ -187,7 +189,7 @@ impl SignalWatcher {
                 Ok(bytes) => {
                     if bytes as usize >= mem::size_of::<GcomSignalState>() {
                         let js_state = RawSignalStateJs::from(&signal_state);
-                        // ErrorStrategy::Fatal: call takes value directly.
+                        // Not callee-handled: call takes the value directly.
                         callback.call(js_state, ThreadsafeFunctionCallMode::NonBlocking);
                     }
                 }
